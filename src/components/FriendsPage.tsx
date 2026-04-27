@@ -69,7 +69,7 @@ function FriendCard({
       <div className="fp-info">
         <div className="fp-name">{friendship.otherUser}</div>
         <div className="fp-sub" style={{ color: STATUS_COLORS[status] }}>
-          {type === 'pending-in' ? <span style={{ color: '#56527e' }}>Demande d'ami reçue</span>
+          {type === 'pending-in' ? <span style={{ color: '#56527e' }}>{"Demande d'ami reçue"}</span>
            : type === 'pending-out' ? <span style={{ color: '#56527e' }}>Demande envoyée</span>
            : subLabel}
         </div>
@@ -179,7 +179,6 @@ function FriendsPage({
     setAddFriendMsg('')
     setAddFriendLoading(true)
 
-    // Vérifier dans l'annuaire public GunDB (userIndex)
     const exists = await new Promise<boolean>((resolve) => {
       const tid = setTimeout(() => resolve(false), 4000)
       gun.get('userIndex').get(target.toLowerCase()).once((data: any) => {
@@ -203,7 +202,6 @@ function FriendsPage({
 
   return (
     <div className="friends-page">
-      {/* Header avec onglets style Discord */}
       <div className="friends-page-header">
         <div className="friends-page-title">
           <span className="friends-page-icon">👥</span>
@@ -232,22 +230,19 @@ function FriendsPage({
             Ajouter un ami
           </button>
         </div>
-
-        {/* Panneau activité droite simulé */}
       </div>
 
       <div className="friends-page-body">
-        {/* Tab Ajouter */}
         {tab === 'add' && (
           <div className="fp-add-section">
             <div className="fp-add-title">AJOUTER UN AMI</div>
             <div className="fp-add-subtitle">
-              Tu peux ajouter des amis avec leur nom d'utilisateur.
+              Tu peux ajouter des amis avec leur nom d&apos;utilisateur.
             </div>
             <div className="fp-add-input-row">
               <input
                 className="fp-add-input"
-                placeholder="Tu peux ajouter des amis avec leur nom d'utilisateur."
+                placeholder="Nom d'utilisateur"
                 value={addFriendInput}
                 onChange={e => { setAddFriendInput(e.target.value); setAddFriendMsg('') }}
                 onKeyDown={e => e.key === 'Enter' && handleAddFriend()}
@@ -257,7 +252,7 @@ function FriendsPage({
                 onClick={handleAddFriend}
                 disabled={!addFriendInput.trim() || addFriendLoading}
               >
-                {addFriendLoading ? 'Vérification…' : 'Envoyer une demande d\'ami'}
+                {addFriendLoading ? 'Vérification…' : "Envoyer une demande d'ami"}
               </button>
             </div>
             {addFriendMsg && (
@@ -269,12 +264,11 @@ function FriendsPage({
           </div>
         )}
 
-        {/* Tab En attente */}
         {tab === 'pending' && (
           <div className="fp-list-section">
             <div className="fp-list-header">EN ATTENTE — {pendingIncoming.length + pendingSent.length}</div>
             {pendingIncoming.length === 0 && pendingSent.length === 0 && (
-              <div className="fp-empty">Aucune demande d'ami en attente.</div>
+              <div className="fp-empty">{"Aucune demande d'ami en attente."}</div>
             )}
             {pendingIncoming.map(f => (
               <FriendCard
@@ -286,7 +280,7 @@ function FriendsPage({
             ))}
             {pendingSent.length > 0 && (
               <>
-                <div className="fp-list-header" style={{ marginTop: 16 }}>EN ATTENTE D'ACCEPTATION — {pendingSent.length}</div>
+                <div className="fp-list-header" style={{ marginTop: 16 }}>{"EN ATTENTE D'ACCEPTATION"} — {pendingSent.length}</div>
                 {pendingSent.map(f => (
                   <FriendCard
                     key={f.pairId} friendship={f} type="pending-out"
@@ -299,43 +293,9 @@ function FriendsPage({
           </div>
         )}
 
-        {/* Tabs En ligne / Tous */}
         {(tab === 'online' || tab === 'all') && (
           <div className="fp-list-section">
-            {/* Barre de recherche */}
             <div className="fp-search-row">
-              <input
-                className="fp-search"
-                placeholder="Rechercher"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
-            </div>
-            <div className="fp-list-header">
-              {tab === 'online' ? 'EN LIGNE' : 'TOUS LES AMIS'} — {filtered.length}
-            </div>
-            {filtered.length === 0 ? (
-              <div className="fp-empty">
-                {tab === 'online' ? 'Aucun ami en ligne.' : 'Aucun ami pour l\'instant.'}
-              </div>
-            ) : (
-              filtered.map(f => (
-                <FriendCard
-                  key={f.pairId} friendship={f} type="friend"
-                  onOpenDM={onOpenFriendDM}
-                  onRemove={onRemoveFriend}
-                />
-              ))
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-export default FriendsPage
-row">
               <input
                 className="fp-search"
                 placeholder="Rechercher"
