@@ -1,0 +1,125 @@
+{
+  "name": "mesh",
+  "private": true,
+  "version": "1.2.1",
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "node server/index.js",
+    "dev:all": "concurrently --kill-others --names \"VITE,SERVER,ELECTRON\" --prefix-colors \"cyan,green,magenta\" \"vite\" \"node server/index.js\" \"wait-on http://localhost:5173 && electron electron/main.js --dev\"",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "electron:dev": "electron electron/main.js --dev",
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:mac": "npm run build && electron-builder --mac",
+    "electron:build:linux": "npm run build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.mesh.app",
+    "productName": "Mesh",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "public/**/*",
+      "!**/node_modules/.cache/**"
+    ],
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!data/**",
+          "!uploads/**",
+          "!node_modules/.cache/**"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "Mesh-Windows-v${version}.exe"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "public/icon.icns",
+      "category": "public.app-category.social-networking"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "public/icon.png",
+      "category": "Network"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "menuCategory": "Mesh",
+      "shortcutName": "Mesh",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "protocols": [
+      {
+        "name": "Mesh",
+        "schemes": [
+          "mesh"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "cam83381-arch",
+      "repo": "mesh",
+      "releaseType": "release",
+      "publishAutoUpdate": true
+    }
+  },
+  "dependencies": {
+    "@trystero-p2p/torrent": "^0.23.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@xyflow/react": "^12.10.2",
+    "bcryptjs": "^3.0.3",
+    "gun": "^0.2020.1241",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.2",
+    "simple-peer": "^9.11.1",
+    "trystero": "^0.23.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "electron": "^34.5.8",
+    "electron-builder": "^24.13.3",
+    "electron-updater": "^6.8.3",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.57.0",
+    "vite": "^8.0.1",
+    "wait-on": "^9.0.5"
+  }
+}

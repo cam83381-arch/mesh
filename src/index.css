@@ -1,0 +1,25 @@
+/* ═══════════════════════════════════════════
+   MESH — index.css
+   Design System : "Neon Architect / Organic Brutalism"
+   ═══════════════════════════════════════════ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #111317;  /* --surface-low fallback */
+  color: #e2e2e7;       /* --text-primary fallback */
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+}

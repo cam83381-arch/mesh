@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="meshGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7c85f5;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#5865f2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#43e179;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Fond arrondi -->
+  <rect width="120" height="120" rx="28" fill="#111317"/>
+
+  <!-- Nœuds du réseau maillé -->
+  <!-- Nœud centre -->
+  <circle cx="60" cy="60" r="7" fill="url(#meshGrad)" filter="url(#glow)"/>
+
+  <!-- Nœuds satellites -->
+  <circle cx="28" cy="40" r="5" fill="#5865f2" opacity="0.9"/>
+  <circle cx="92" cy="40" r="5" fill="#5865f2" opacity="0.9"/>
+  <circle cx="28" cy="80" r="5" fill="#43e179" opacity="0.9"/>
+  <circle cx="92" cy="80" r="5" fill="#43e179" opacity="0.9"/>
+  <circle cx="60" cy="22" r="4.5" fill="#7c85f5" opacity="0.8"/>
+  <circle cx="60" cy="98" r="4.5" fill="#7c85f5" opacity="0.8"/>
+
+  <!-- Connexions maillées (toutes les liaisons) -->
+  <!-- Centre → satellites -->
+  <line x1="60" y1="60" x2="28" y2="40" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+  <line x1="60" y1="60" x2="92" y2="40" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+  <line x1="60" y1="60" x2="28" y2="80" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+  <line x1="60" y1="60" x2="92" y2="80" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+  <line x1="60" y1="60" x2="60" y2="22" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+  <line x1="60" y1="60" x2="60" y2="98" stroke="url(#meshGrad)" stroke-width="1.5" opacity="0.6"/>
+
+  <!-- Liaisons entre satellites (le "maillage") -->
+  <line x1="28" y1="40" x2="60" y2="22" stroke="#5865f2" stroke-width="1" opacity="0.4"/>
+  <line x1="92" y1="40" x2="60" y2="22" stroke="#5865f2" stroke-width="1" opacity="0.4"/>
+  <line x1="28" y1="80" x2="60" y2="98" stroke="#43e179" stroke-width="1" opacity="0.4"/>
+  <line x1="92" y1="80" x2="60" y2="98" stroke="#43e179" stroke-width="1" opacity="0.4"/>
+  <line x1="28" y1="40" x2="28" y2="80" stroke="#5865f2" stroke-width="1" opacity="0.35"/>
+  <line x1="92" y1="40" x2="92" y2="80" stroke="#43e179" stroke-width="1" opacity="0.35"/>
+</svg>
