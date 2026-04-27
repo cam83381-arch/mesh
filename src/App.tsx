@@ -527,8 +527,9 @@ function App() {
         {showServerModal && (
           <ServerModal
             onCreateServer={(name) => {
-              const server = createServer(name)
-              setActiveServerId(server.id); setIsDMMode(false); setShowServerModal(false)
+              createServer(name).then(server => {
+                if (server) { setActiveServerId(server.id); setIsDMMode(false); setShowServerModal(false) }
+              })
             }}
             onJoinServer={async (input) => {
               let server = await joinByInvite(input)

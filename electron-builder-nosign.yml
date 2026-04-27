@@ -1,0 +1,15 @@
+win:
+  target:
+    - nsis
+  certificateFile: null
+  certificatePassword: null
+  signingHashAlgorithms:
+    - sha256
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerIcon: public/icon.ico
+  uninstallerIcon: public/icon.ico
+  installerHeaderIcon: public/icon.ico

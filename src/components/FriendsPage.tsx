@@ -335,3 +335,35 @@ function FriendsPage({
 }
 
 export default FriendsPage
+row">
+              <input
+                className="fp-search"
+                placeholder="Rechercher"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="fp-list-header">
+              {tab === 'online' ? 'EN LIGNE' : 'TOUS LES AMIS'} — {filtered.length}
+            </div>
+            {filtered.length === 0 ? (
+              <div className="fp-empty">
+                {tab === 'online' ? 'Aucun ami en ligne.' : "Aucun ami pour l'instant."}
+              </div>
+            ) : (
+              filtered.map(f => (
+                <FriendCard
+                  key={f.pairId} friendship={f} type="friend"
+                  onOpenDM={onOpenFriendDM}
+                  onRemove={onRemoveFriend}
+                />
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default FriendsPage

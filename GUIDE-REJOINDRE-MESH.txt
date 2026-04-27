@@ -1,0 +1,50 @@
+============================================
+  MESH — Comment se connecter au serveur d'un ami
+============================================
+
+Avant de commencer, assure-toi que ton ami (l'hôte) a bien lancé
+Mesh chez lui et t'a envoyé une URL ngrok (ex: https://xxxx.ngrok-free.app).
+
+
+ÉTAPES POUR LES INVITÉS :
+─────────────────────────
+
+1. Télécharge et installe Mesh
+   └─ Utilise le fichier MeshSetup.exe que l'hôte t'a envoyé.
+
+2. Lance Mesh et crée un compte
+   └─ Choisis un pseudo, c'est tout.
+
+3. Configure le serveur de l'hôte
+   └─ Clique sur l'icône ⚙️ (Paramètres utilisateur, en bas à gauche)
+   └─ Va dans l'onglet "Avancés" (tout en bas de la sidebar)
+   └─ Dans le champ "Connexion au serveur", colle l'URL ngrok de l'hôte
+      Exemple : https://ab12-34-56.ngrok-free.app
+   └─ Clique "💾 Sauvegarder"
+
+4. Redémarre Mesh complètement
+   └─ Ferme l'app (clic droit sur l'icône dans la barre système → Quitter)
+   └─ Relance Mesh
+
+5. Rejoins le serveur de l'hôte
+   └─ L'hôte doit te donner le code d'invitation de son serveur Mesh
+   └─ Clique sur "+" dans la barre des serveurs → "Rejoindre un serveur"
+   └─ Entre le code et commence à discuter !
+
+
+EN CAS DE PROBLÈME :
+────────────────────
+
+• "Impossible de se connecter" → Vérifie que l'URL ngrok est correcte
+  et que l'hôte a bien lancé son serveur.
+
+• "L'URL a changé" → L'hôte a redémarré ngrok. Demande-lui la nouvelle URL,
+  change-la dans Paramètres → Avancés, et redémarre Mesh.
+
+• Pour revenir au serveur local (dev) → Dans Avancés, clique "↺ Réinitialiser"
+  et redémarre.
+
+
+============================================
+  Bonne discussion ! — L'équipe Mesh
+============================================

@@ -253,3 +253,6 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
 }
 
 export default useSocket
+}
+
+export default useSocket

@@ -1,0 +1,126 @@
+name: Release Mesh
+
+on:
+  push:
+    tags:
+      - 'v*'            # Déclenché par : git tag v1.1.0 && git push origin v1.1.0
+
+permissions:
+  contents: write       # Nécessaire pour créer la GitHub Release
+
+jobs:
+  # ── Build Windows ──────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron Windows (avec signature si cert disponible)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Décommenter quand le certificat de signature est disponible :
+          # CSC_LINK: ${{ secrets.WIN_CSC_LINK }}            # base64 du .p12
+          # CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npx electron-builder --win --publish always
+
+  # ── Build macOS ─────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron macOS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signature macOS (décommenter si Apple Developer ID disponible) :
+          # CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --publish always
+
+  # ── Build Linux ──────────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Installer les dépendances système (AppImage)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools fakeroot rpm
+
+      - name: Installer les dépendances npm
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Electron Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --publish always
+
+  # ── Créer la GitHub Release ─────────────────────────────────────────────────
+  # (electron-builder --publish always le fait automatiquement via GH_TOKEN)
+  # Mais on peut ajouter des release notes ici si besoin :
+  create-release-notes:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Générer les release notes depuis git log
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES=$(git log --pretty=format:"- %s" ${PREV_TAG}..HEAD)
+          else
+            CHANGES=$(git log --pretty=format:"- %s")
+          fi
+          gh release edit "$TAG" \
+            --notes "## Mesh ${TAG}
+
+### Changements
+${CHANGES}
+
+### Téléchargements
+- **Windows** : \`Mesh-Windows-v*.exe\` (installeur NSIS)
+- **macOS** : \`Mesh-Mac-v*.dmg\`
+- **Linux** : \`Mesh-Linux-v*.AppImage\`
+
+> Mesh est une application P2P — vos données restent sur vos machines." \
+            2>/dev/null || echo "Release notes update skipped"

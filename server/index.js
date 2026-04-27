@@ -147,7 +147,7 @@ app.use((err, req, res, next) => {
 
 // ── Proxy GIF Tenor (évite les CORS Electron + clé exposée côté client) ──
 const https = require('https')
-const TENOR_KEY = 'AIzaSyAyimkuYQYF_FXVALexPzpxWxBlTFWRRlM'
+const TENOR_KEY = process.env.TENOR_KEY || 'AIzaSyAyimkuYQYF_FXVALexPzpxWxBlTFWRRlM'
 
 app.get('/api/gifs', (req, res) => {
   const q = req.query.q || ''
