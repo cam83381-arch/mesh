@@ -72,11 +72,13 @@ function App() {
   const { members, updateRole, kickMember, isKicked, assignCustomRole } = useMembers(activeServerId, username)
   const { customRoles, createRole, updateRole: updateCustomRole, updatePermission, deleteRole } = useRoles(activeServerId)
 
+  const { profile, updateStatus, updateCustomStatus, saveProfile } = useProfile(username)
+
   // Socket canal principal
   const {
     messages, reactions, typingUsers,
     sendMessage, editMessage, deleteMessage, addReaction, removeReaction, sendTyping
-  } = useSocket(currentChannel?.id || '', username, activeServerId)
+  } = useSocket(currentChannel?.id || '', username, activeServerId, profile)
 
   // Socket volet droit (split-view)
   const {
@@ -87,9 +89,7 @@ function App() {
     addReaction: addRightReaction,
     removeReaction: removeRightReaction,
     sendTyping: sendRightTyping,
-  } = useSocket(rightChannel?.id || '', username, rightChannel ? activeServerId : '')
-
-  const { profile, updateStatus, updateCustomStatus, saveProfile } = useProfile(username)
+  } = useSocket(rightChannel?.id || '', username, rightChannel ? activeServerId : '', profile)
   const { settings, updateSettings } = useSettings(username)
   const {
     isStreaming, streamers, watchingStream, videoRef, startStream, stopStream, watchStream, stopWatching,
@@ -576,11 +576,13 @@ function App() {
         )}
 
         {showBotEditor && activeServerId && (
-          <BotEditor
-            serverId={activeServerId}
-            botId={activeBotId}
-            onBack={() => { setShowBotEditor(false); setActiveBotId(null) }}
-          />
+          <div className="bot-editor-overlay">
+            <BotEditor
+              serverId={activeServerId}
+              botId={activeBotId}
+              onBack={() => { setShowBotEditor(false); setActiveBotId(null) }}
+            />
+          </div>
         )}
 
       </div>

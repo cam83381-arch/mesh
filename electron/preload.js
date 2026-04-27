@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('electron', {
   // Screen/window capture sources (desktopCapturer)
   getDesktopSources: (opts) => ipcRenderer.invoke('get-desktop-sources', opts),
 
+  // Stockage local (AppData/Roaming/Mesh/mesh-data/)
+  readLocalFile: (filename) => ipcRenderer.invoke('read-local-file', filename),
+  writeLocalFile: (filename, data) => ipcRenderer.invoke('write-local-file', filename, data),
+  deleteLocalFile: (filename) => ipcRenderer.invoke('delete-local-file', filename),
+
   // Utilitaire
   isElectron: true
 })

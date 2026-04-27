@@ -18,7 +18,7 @@ interface AutoModConfig {
   enabled: boolean
 }
 
-function useSocket(channelId: string, username: string, serverId: string) {
+function useSocket(channelId: string, username: string, serverId: string, myProfile?: any) {
   const [messages, setMessages] = useState<Message[]>([])
   const [reactions, setReactions] = useState<Record<string, Record<string, string[]>>>({})
   const [typingUsers, setTypingUsers] = useState<string[]>([])
@@ -46,7 +46,7 @@ function useSocket(channelId: string, username: string, serverId: string) {
     const roomKey = `${serverId}_${channelId}`
 
     // ── Trystero P2P ──
-    const room = joinMeshRoom(roomKey)
+    const room = joinMeshRoom(roomKey, myProfile)
 
     if (room) {
       // makeAction<any> contourne la contrainte DataPayload pour nos objets custom

@@ -1,44 +1,24 @@
+/**
+ * useAuth.ts — Authentification 100% locale (AppData/mesh-data/users.json)
+ *
+ * Les credentials ne quittent jamais la machine.
+ * Le profil est partagé aux pairs en temps réel via Trystero (mesh.ts)
+ * quand l'utilisateur rejoint une room — pas via un serveur central.
+ */
+
 import { useState } from 'react'
 import Gun from 'gun'
-import 'gun/sea'
-import gun from './gun'
+import { readLocal, writeLocal } from './localStore'
 
 const sea: any = (Gun as any).SEA
 
-/**
- * Lire un noeud GunDB avec retries.
- * GunDB retourne undefined immédiatement si pas encore synchro —
- * on retente plusieurs fois avant de conclure que la donnée n'existe pas.
- */
-function readWithRetry(ref: any, maxAttempts = 8, delayMs = 1000): Promise<any> {
-  return new Promise((resolve) => {
-    let attempt = 0
-    let resolved = false
-
-    const done = (data: any) => {
-      if (!resolved) { resolved = true; resolve(data) }
-    }
-
-    const tryOnce = () => {
-      if (resolved) return
-      attempt++
-      ref.once((data: any) => {
-        if (resolved) return
-        if (data !== undefined && data !== null) {
-          done(data)
-        } else if (attempt < maxAttempts) {
-          setTimeout(tryOnce, delayMs)
-        } else {
-          done(undefined)
-        }
-      })
-    }
-
-    tryOnce()
-    // Timeout de sécurité absolu
-    setTimeout(() => done(undefined), maxAttempts * delayMs + 2000)
-  })
+interface StoredUser {
+  username: string
+  passwordHash: string
+  createdAt: number
 }
+
+type UsersDB = Record<string, StoredUser>
 
 function useAuth() {
   const [error, setError] = useState('')
@@ -48,23 +28,23 @@ function useAuth() {
     setLoading(true)
     setError('')
 
-    // Vérifier si le pseudo existe déjà (avec retries)
-    const existing = await readWithRetry(gun.get('users').get(username))
+    const users: UsersDB = (await readLocal<UsersDB>('users.json')) || {}
 
-    if (existing && existing.username) {
+    if (users[username.toLowerCase()]) {
       setError('Ce pseudo est déjà pris !')
       setLoading(false)
       return null
     }
 
-    const hash = await sea.work(password, username)
-    const user = {
+    const passwordHash = await sea.work(password, username)
+
+    users[username.toLowerCase()] = {
       username,
-      password: hash,
+      passwordHash,
       createdAt: Date.now(),
-      role: 'user'
     }
-    gun.get('users').get(username).put(user)
+
+    await writeLocal('users.json', users)
     setLoading(false)
     return username
   }
@@ -73,18 +53,20 @@ function useAuth() {
     setLoading(true)
     setError('')
 
-    const user = await readWithRetry(gun.get('users').get(username))
+    const users: UsersDB = (await readLocal<UsersDB>('users.json')) || {}
+    const stored = users[username.toLowerCase()]
 
-    if (!user || !user.username) {
+    if (!stored) {
       setError('Utilisateur introuvable. Vérifie ton pseudo ou crée un compte.')
       setLoading(false)
       return null
     }
 
-    const hash = await sea.work(password, username)
-    if (hash === user.password) {
+    const passwordHash = await sea.work(password, username)
+
+    if (passwordHash === stored.passwordHash) {
       setLoading(false)
-      return username
+      return stored.username // retourne le username avec la casse d'origine
     } else {
       setError('Mot de passe incorrect !')
       setLoading(false)

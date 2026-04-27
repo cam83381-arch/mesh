@@ -412,3 +412,36 @@ ipcMain.on('install-update', () => {
     }
   }
 })
+
+// ── IPC : stockage local profil/serveurs (AppData) ──
+const MESH_DATA_DIR = path.join(app.getPath('userData'), 'mesh-data')
+
+function ensureDataDir() {
+  if (!fs.existsSync(MESH_DATA_DIR)) fs.mkdirSync(MESH_DATA_DIR, { recursive: true })
+}
+
+ipcMain.handle('read-local-file', (_event, filename) => {
+  try {
+    ensureDataDir()
+    const fp = path.join(MESH_DATA_DIR, filename)
+    if (!fs.existsSync(fp)) return null
+    return JSON.parse(fs.readFileSync(fp, 'utf8'))
+  } catch { return null }
+})
+
+ipcMain.handle('write-local-file', (_event, filename, data) => {
+  try {
+    ensureDataDir()
+    const fp = path.join(MESH_DATA_DIR, filename)
+    fs.writeFileSync(fp, JSON.stringify(data, null, 2), 'utf8')
+    return true
+  } catch { return false }
+})
+
+ipcMain.handle('delete-local-file', (_event, filename) => {
+  try {
+    const fp = path.join(MESH_DATA_DIR, filename)
+    if (fs.existsSync(fp)) fs.unlinkSync(fp)
+    return true
+  } catch { return false }
+})
