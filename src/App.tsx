@@ -575,17 +575,19 @@ function App() {
           />
         )}
 
-        {showBotEditor && activeServerId && (
-          <div className="bot-editor-overlay">
-            <BotEditor
-              serverId={activeServerId}
-              botId={activeBotId}
-              onBack={() => { setShowBotEditor(false); setActiveBotId(null) }}
-            />
-          </div>
-        )}
-
       </div>
+
+      {/* BotEditor en dehors de app-content — overlay full-screen sur toute la fenêtre */}
+      {showBotEditor && activeServerId && (
+        <div className="bot-editor-overlay">
+          <BotEditor
+            serverId={activeServerId}
+            botId={activeBotId}
+            onBack={() => { setShowBotEditor(false); setActiveBotId(null) }}
+          />
+        </div>
+      )}
+
     </div>
   )
 }

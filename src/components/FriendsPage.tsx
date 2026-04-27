@@ -144,6 +144,8 @@ function FriendsPage({
   const [onlineStatuses, setOnlineStatuses] = useState<Record<string, string>>({})
   const [addFriendInput, setAddFriendInput] = useState('')
   const [addFriendMsg, setAddFriendMsg] = useState('')
+  const [addFriendError, setAddFriendError] = useState('')
+  const [addFriendLoading, setAddFriendLoading] = useState(false)
   const [search, setSearch] = useState('')
 
   useEffect(() => {
@@ -170,11 +172,32 @@ function FriendsPage({
     f.otherUser.toLowerCase().includes(search.toLowerCase())
   )
 
-  const handleAddFriend = () => {
-    if (!addFriendInput.trim()) return
-    onSendFriendRequest(addFriendInput.trim())
-    setAddFriendMsg(`Demande d'ami envoyée à ${addFriendInput.trim()} !`)
+  const handleAddFriend = async () => {
+    const target = addFriendInput.trim()
+    if (!target) return
+    setAddFriendError('')
+    setAddFriendMsg('')
+    setAddFriendLoading(true)
+
+    // Vérifier dans l'annuaire public GunDB (userIndex)
+    const exists = await new Promise<boolean>((resolve) => {
+      const tid = setTimeout(() => resolve(false), 4000)
+      gun.get('userIndex').get(target.toLowerCase()).once((data: any) => {
+        clearTimeout(tid)
+        resolve(!!(data && data.exists))
+      })
+    })
+
+    if (!exists) {
+      setAddFriendError(`Aucun utilisateur trouvé avec le pseudo « ${target} ». Vérifie l'orthographe.`)
+      setAddFriendLoading(false)
+      return
+    }
+
+    onSendFriendRequest(target)
+    setAddFriendMsg(`Demande d'ami envoyée à ${target} !`)
     setAddFriendInput('')
+    setAddFriendLoading(false)
     setTimeout(() => setAddFriendMsg(''), 4000)
   }
 
@@ -232,13 +255,16 @@ function FriendsPage({
               <button
                 className="fp-add-btn"
                 onClick={handleAddFriend}
-                disabled={!addFriendInput.trim()}
+                disabled={!addFriendInput.trim() || addFriendLoading}
               >
-                Envoyer une demande d'ami
+                {addFriendLoading ? 'Vérification…' : 'Envoyer une demande d\'ami'}
               </button>
             </div>
             {addFriendMsg && (
               <div className="fp-add-success">✓ {addFriendMsg}</div>
+            )}
+            {addFriendError && (
+              <div className="fp-add-error">⚠ {addFriendError}</div>
             )}
           </div>
         )}

@@ -5429,6 +5429,12 @@ body.is-electron .app {
   font-size: 13px;
   font-weight: 600;
 }
+.fp-add-error {
+  margin-top: 10px;
+  color: #f23f43;
+  font-size: 13px;
+  font-weight: 600;
+}
 
 /* ──────────────────────────────────────────────────────────────────
    USER PANEL BAR — Bas sidebar (photo 5)
