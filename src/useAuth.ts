@@ -5,48 +5,12 @@ import gun from './gun'
 
 const sea: any = (Gun as any).SEA
 
-const PEERS_TO_CHECK = [
-  'http://localhost:3001/',
-  'https://gun-manhattan.herokuapp.com/',
-  'https://peer.wallie.io/',
-]
-
-// Attendre qu'au moins un peer GunDB soit accessible (max timeoutMs)
-function waitForAnyPeer(timeoutMs = 8000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let resolved = false
-    let intervalId: ReturnType<typeof setInterval> | null = null
-
-    const done = (ok: boolean) => {
-      if (!resolved) {
-        resolved = true
-        if (intervalId) clearInterval(intervalId)
-        resolve(ok)
-      }
-    }
-
-    const checkPeer = async (url: string) => {
-      if (resolved) return
-      try {
-        const res = await fetch(url, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(2000)
-        })
-        if (res.ok || res.status < 500) done(true)
-      } catch {}
-    }
-
-    const checkAll = () => PEERS_TO_CHECK.forEach(url => checkPeer(url))
-
-    checkAll()
-    intervalId = setInterval(checkAll, 600)
-    setTimeout(() => done(false), timeoutMs)
-  })
-}
-
-// Lire un noeud GunDB avec retries (GunDB peut retourner undefined
-// si pas encore sync -- on retente plusieurs fois)
-function readWithRetry(ref: any, maxAttempts = 5, delayMs = 800): Promise<any> {
+/**
+ * Lire un noeud GunDB avec retries.
+ * GunDB retourne undefined immédiatement si pas encore synchro —
+ * on retente plusieurs fois avant de conclure que la donnée n'existe pas.
+ */
+function readWithRetry(ref: any, maxAttempts = 8, delayMs = 1000): Promise<any> {
   return new Promise((resolve) => {
     let attempt = 0
     let resolved = false
@@ -71,7 +35,7 @@ function readWithRetry(ref: any, maxAttempts = 5, delayMs = 800): Promise<any> {
     }
 
     tryOnce()
-    // Timeout de securite
+    // Timeout de sécurité absolu
     setTimeout(() => done(undefined), maxAttempts * delayMs + 2000)
   })
 }
@@ -84,19 +48,11 @@ function useAuth() {
     setLoading(true)
     setError('')
 
-    // Attendre qu'au moins un peer soit accessible
-    const connected = await waitForAnyPeer(8000)
-    if (!connected) {
-      setError('Aucun serveur accessible. Verifie ta connexion internet.')
-      setLoading(false)
-      return null
-    }
-
-    // Verifier si le pseudo existe deja (avec retries)
+    // Vérifier si le pseudo existe déjà (avec retries)
     const existing = await readWithRetry(gun.get('users').get(username))
 
     if (existing && existing.username) {
-      setError('Ce pseudo est deja pris !')
+      setError('Ce pseudo est déjà pris !')
       setLoading(false)
       return null
     }
@@ -117,18 +73,10 @@ function useAuth() {
     setLoading(true)
     setError('')
 
-    // Attendre qu'au moins un peer soit accessible
-    const connected = await waitForAnyPeer(8000)
-    if (!connected) {
-      setError('Aucun serveur accessible. Verifie ta connexion internet.')
-      setLoading(false)
-      return null
-    }
-
     const user = await readWithRetry(gun.get('users').get(username))
 
     if (!user || !user.username) {
-      setError('Utilisateur introuvable !')
+      setError('Utilisateur introuvable. Vérifie ton pseudo ou crée un compte.')
       setLoading(false)
       return null
     }

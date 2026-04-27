@@ -11,7 +11,7 @@ function Auth({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const { login, register, error, loading } = useAuth()
-  const { ready: serverReady } = useServerReady(10000)
+  const { ready: serverReady } = useServerReady(4000)
 
   const handleSubmit = async () => {
     if (!username.trim() || !password.trim()) return
@@ -130,83 +130,4 @@ function Auth({ onLogin }: Props) {
             {/* Connexions périphériques (le maillage) */}
             <line x1="10" y1="16" x2="30" y2="6"  stroke="#7c5aff" strokeWidth="1" opacity="0.32"/>
             <line x1="50" y1="16" x2="30" y2="6"  stroke="#7c5aff" strokeWidth="1" opacity="0.32"/>
-            <line x1="10" y1="44" x2="30" y2="54" stroke="#00c9b1" strokeWidth="1" opacity="0.32"/>
-            <line x1="50" y1="44" x2="30" y2="54" stroke="#00c9b1" strokeWidth="1" opacity="0.32"/>
-            <line x1="10" y1="16" x2="10" y2="44" stroke="url(#ag2)" strokeWidth="1" opacity="0.28"/>
-            <line x1="50" y1="16" x2="50" y2="44" stroke="url(#ag2)" strokeWidth="1" opacity="0.28"/>
-            <line x1="10" y1="16" x2="50" y2="44" stroke="url(#ag2)" strokeWidth="0.7" opacity="0.14"/>
-            <line x1="50" y1="16" x2="10" y2="44" stroke="url(#ag2)" strokeWidth="0.7" opacity="0.14"/>
-          </svg>
-        </div>
-
-        <h1 className="auth-title">
-          {isLogin ? 'Content de te revoir' : 'Rejoins le réseau'}
-        </h1>
-        <p className="auth-subtitle">
-          {isLogin
-            ? 'Connecte-toi à ton réseau Mesh'
-            : 'Crée un compte — tes données t\'appartiennent'}
-        </p>
-
-        {error && (
-          <div className="auth-error">
-            <span className="auth-error-icon">⚠</span> {error}
-          </div>
-        )}
-
-        <div className="auth-field">
-          <label>Nom d'utilisateur</label>
-          <input
-            type="text"
-            placeholder="Ton pseudo"
-            value={username}
-            onChange={e => setUsername(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            disabled={loading}
-            autoFocus
-            autoComplete="username"
-          />
-        </div>
-
-        <div className="auth-field">
-          <label>Mot de passe</label>
-          <input
-            type="password"
-            placeholder="••••••••"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            disabled={loading}
-            autoComplete={isLogin ? 'current-password' : 'new-password'}
-          />
-          {!isLogin && (
-            <span className="auth-field-hint">6 caractères minimum</span>
-          )}
-        </div>
-
-        <button
-          className="auth-btn"
-          onClick={handleSubmit}
-          disabled={loading || !username.trim() || password.length < 1}
-        >
-          {loading
-            ? <><span className="auth-spinner"/> {isLogin ? 'Connexion…' : 'Création…'}</>
-            : isLogin ? 'Se connecter' : "Créer le compte"}
-        </button>
-
-        <p className="auth-switch">
-          {isLogin ? 'Pas encore de compte ? ' : 'Déjà un compte ? '}
-          <span onClick={() => setIsLogin(!isLogin)}>
-            {isLogin ? "S'inscrire" : 'Se connecter'}
-          </span>
-        </p>
-
-        <p className="auth-p2p-note">
-          🔒 P2P — aucune donnée envoyée à des serveurs tiers
-        </p>
-      </div>
-    </div>
-  )
-}
-
-export default Auth
+        

@@ -1,60 +1,44 @@
 import { useState, useEffect } from 'react'
+import gun from './gun'
 
-// Verifie si le reseau GunDB est accessible (local ou relays publics)
-// Retourne ready=true des qu'un peer repond, ou apres timeout
-function useServerReady(timeoutMs = 8000): { ready: boolean } {
+/**
+ * useServerReady — détecte si GunDB est connecté à au moins un peer.
+ * Utilise l'événement natif GunDB "hi" (peer connecté) au lieu de fetch HTTP.
+ * Après timeoutMs, on laisse passer de toute façon (données en cache radisk).
+ */
+function useServerReady(timeoutMs = 5000): { ready: boolean } {
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-    let intervalId: ReturnType<typeof setInterval> | null = null
-    let resolved = false
+    let done = false
 
-    const PEERS_TO_CHECK = [
-      'http://localhost:3001/',
-      'https://gun-manhattan.herokuapp.com/',
-      'https://peer.wallie.io/',
-    ]
-
-    const checkPeer = async (url: string) => {
-      if (resolved || cancelled) return
-      try {
-        const res = await fetch(url, {
-          method: 'HEAD',
-          signal: AbortSignal.timeout(2000)
-        })
-        if ((res.ok || res.status < 500) && !resolved && !cancelled) {
-          resolved = true
-          if (intervalId) clearInterval(intervalId)
-          setReady(true)
-        }
-      } catch {
-        // Ce peer n'est pas accessible
-      }
-    }
-
-    const checkAll = () => {
-      PEERS_TO_CHECK.forEach(url => checkPeer(url))
-    }
-
-    // Premiere tentative immediate
-    checkAll()
-    // Puis toutes les 600ms
-    intervalId = setInterval(checkAll, 600)
-
-    // Timeout global -- on laisse passer de toute facon
-    // (l'utilisateur deja en cache peut se connecter sans reseau)
-    const timeoutId = setTimeout(() => {
-      if (!cancelled && !resolved) {
-        if (intervalId) clearInterval(intervalId)
+    const resolve = () => {
+      if (!done) {
+        done = true
         setReady(true)
       }
-    }, timeoutMs)
+    }
+
+    // GunDB émet "hi" quand un peer WebSocket se connecte
+    try {
+      const mesh = (gun as any)._.messy || (gun as any)._
+      if (mesh && mesh.on) {
+        mesh.on('hi', resolve)
+      }
+    } catch {}
+
+    // Aussi écouter via gun.on si disponible
+    try {
+      gun.on('hi', resolve)
+    } catch {}
+
+    // Timeout de sécurité : on laisse toujours passer après timeoutMs
+    // (l'utilisateur peut avoir ses données en cache radisk local)
+    const tid = setTimeout(resolve, timeoutMs)
 
     return () => {
-      cancelled = true
-      if (intervalId) clearInterval(intervalId)
-      clearTimeout(timeoutId)
+      done = true
+      clearTimeout(tid)
     }
   }, [timeoutMs])
 
