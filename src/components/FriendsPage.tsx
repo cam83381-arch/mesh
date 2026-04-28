@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { Friendship } from '../useFriends'
 import gun from '../gun'
 
@@ -147,6 +147,14 @@ function FriendsPage({
   const [addFriendError, setAddFriendError] = useState('')
   const [addFriendLoading, setAddFriendLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const addFriendInputRef = useRef<HTMLInputElement>(null)
+
+  // Focus automatique sur l'input quand on ouvre le tab "add"
+  useEffect(() => {
+    if (tab === 'add') {
+      setTimeout(() => addFriendInputRef.current?.focus(), 50)
+    }
+  }, [tab])
 
   useEffect(() => {
     const all = [...friends, ...pendingIncoming, ...pendingSent]
@@ -241,11 +249,14 @@ function FriendsPage({
             </div>
             <div className="fp-add-input-row">
               <input
+                ref={addFriendInputRef}
                 className="fp-add-input"
                 placeholder="Nom d'utilisateur"
                 value={addFriendInput}
                 onChange={e => { setAddFriendInput(e.target.value); setAddFriendMsg('') }}
                 onKeyDown={e => e.key === 'Enter' && handleAddFriend()}
+                autoComplete="off"
+                spellCheck={false}
               />
               <button
                 className="fp-add-btn"

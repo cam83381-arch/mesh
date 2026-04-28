@@ -1,11 +1,12 @@
 import './App.css'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import TitleBar from './components/TitleBar'
 import ServerBar from './components/ServerBar'
 import ChannelSidebar from './components/ChannelSidebar'
 import ChatArea from './components/ChatArea'
 import StreamArea from './components/StreamArea'
+import StreamPip from './components/StreamPip'
 import Auth from './components/Auth'
 import ServerModal from './components/ServerModal'
 import ServerSettings from './components/ServerSettings'
@@ -21,6 +22,7 @@ import BotEditor from './components/BotEditor'
 import VoicePip from './components/VoicePip'
 import UpdateBanner from './components/UpdateBanner'
 
+import gun from './gun'
 import { useApp } from './context/AppContext'
 import { useAppUI } from './hooks/useAppUI'
 import useServers from './useServers'
@@ -43,6 +45,13 @@ import useVoicePresence from './useVoicePresence'
 function App() {
   const { user, setUser } = useApp()
   const username = user?.username || ''
+  const [streamPipActive, setStreamPipActive] = useState(false)
+  const [serverBannerUrl, setServerBannerUrl] = useState('')
+  const [serverBannerColor, setServerBannerColor] = useState('')
+  const prevBannerServerId = useRef('')
+  // Refs pour détecter les join/leave membres et vocaux
+  const prevMembersRef = useRef<string[]>([])
+  const prevVoiceUsersRef = useRef<string[]>([])
 
   // ── État UI centralisé ──
   const {
@@ -92,7 +101,7 @@ function App() {
   } = useSocket(rightChannel?.id || '', username, rightChannel ? activeServerId : '', profile)
   const { settings, updateSettings } = useSettings(username)
   const {
-    isStreaming, streamers, watchingStream, videoRef, startStream, stopStream, watchStream, stopWatching,
+    isStreaming, streamers, watchingStream, videoRef, screenStream, startStream, stopStream, watchStream, stopWatching,
     isCameraOn, cameraVideoRef, toggleCamera, voiceUsers, voiceFull, joinVoice, leaveVoice,
     isMuted, isDeafened, toggleMute, toggleDeafen,
     remoteAudios, localAudioStream,
@@ -121,13 +130,28 @@ function App() {
     onSendBotMessage: (channelId, content) => {
       if (channelId) sendMessage(content, undefined, undefined, undefined, undefined, undefined)
     },
-    onSendBotDM: (_targetUsername, _content) => { /* DM bot — non implémenté */ },
+    onSendBotDM: (_targetUsername, _content) => { /* DM bot — P2P via useDMs à câbler si besoin */ },
     onAddReaction: (messageId, emoji) => addReaction(messageId, emoji, `bot_${activeServerId}`),
     onDeleteMessage: deleteMessage,
     onKickMember: (u) => kickMember(u),
+    onBanMember: (u) => updateRole(u, 'banned'),
+    onPinMessage: (_msgId) => { /* pin stocké dans GunDB — câblé si besoin */ },
     onAssignRole: (u, role) => assignCustomRole(u, role),
-    onRemoveRole: (_u, _role) => { /* TODO: removeCustomRole */ },
+    onRemoveRole: (_u, _role) => { /* removeCustomRole non exposé pour l'instant */ },
   })
+
+  // ── Charger banner du serveur actif ──
+  useEffect(() => {
+    if (!activeServerId) { setServerBannerUrl(''); setServerBannerColor(''); return }
+    if (prevBannerServerId.current === activeServerId) return
+    prevBannerServerId.current = activeServerId
+    setServerBannerUrl(''); setServerBannerColor('')
+    gun.get('servers').get(activeServerId).once((data: any) => {
+      if (!data) return
+      setServerBannerUrl(data.bannerUrl || '')
+      setServerBannerColor(data.bannerColor || '')
+    })
+  }, [activeServerId])
 
   // ── Effets ──
   useEffect(() => {
@@ -137,25 +161,86 @@ function App() {
     }
   }, [isKicked, activeServerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Bot engine : dispatcher sur nouveaux messages
+  // Bot engine : dispatcher sur nouveaux messages (+ commandes)
   useEffect(() => {
     if (!activeServerId || !currentChannel) return
     const newMessages = messages.slice(prevMsgCountRef.current)
     for (const msg of newMessages) {
-      if ((msg.author || msg.authorName) === username) continue
+      const authorName = msg.author || msg.authorName || ''
+      if (authorName === username) continue
+      const content = msg.content || ''
+      // Dispatch message event
       dispatchBotEvent({
         type: 'message',
         serverId: activeServerId,
         channelId: currentChannel.id,
         channelName: currentChannel.name,
-        authorId: msg.author || msg.authorName || '',
-        authorName: msg.author || msg.authorName || '',
-        content: msg.content || '',
+        authorId: authorName,
+        authorName,
+        content,
         messageId: msg.id,
       })
+      // Si c'est une commande (commence par ! ou /), dispatch aussi un event 'command'
+      if (content.startsWith('!') || content.startsWith('/')) {
+        dispatchBotEvent({
+          type: 'command',
+          serverId: activeServerId,
+          channelId: currentChannel.id,
+          channelName: currentChannel.name,
+          authorId: authorName,
+          authorName,
+          content,
+          command: content.split(' ')[0],
+          messageId: msg.id,
+        })
+      }
     }
     prevMsgCountRef.current = messages.length
   }, [messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Bot engine : member join / leave
+  useEffect(() => {
+    if (!activeServerId) return
+    const currentUsernames = members.map(m => m.username)
+    const prev = prevMembersRef.current
+
+    // Nouveaux membres (join)
+    for (const u of currentUsernames) {
+      if (!prev.includes(u)) {
+        dispatchBotEvent({ type: 'member_join', serverId: activeServerId, authorName: u, authorId: u })
+      }
+    }
+    // Membres partis (leave)
+    for (const u of prev) {
+      if (!currentUsernames.includes(u)) {
+        dispatchBotEvent({ type: 'member_leave', serverId: activeServerId, authorName: u, authorId: u })
+      }
+    }
+
+    prevMembersRef.current = currentUsernames
+  }, [members.length, activeServerId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Bot engine : voice join
+  useEffect(() => {
+    if (!activeServerId) return
+    const currentVoice = voiceUsers.map(u => u.username)
+    const prev = prevVoiceUsersRef.current
+
+    for (const u of currentVoice) {
+      if (!prev.includes(u) && u !== username) {
+        dispatchBotEvent({
+          type: 'voice_join',
+          serverId: activeServerId,
+          authorName: u,
+          authorId: u,
+          channelId: activeVoiceChannel?.id,
+          channelName: activeVoiceChannel?.name,
+        })
+      }
+    }
+
+    prevVoiceUsersRef.current = currentVoice
+  }, [voiceUsers.length, activeServerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rejoindre salon vocal automatiquement à la navigation
   useEffect(() => {
@@ -212,7 +297,22 @@ function App() {
 
   const handleEditMessage = useCallback((id: string, content: string) => editMessage(id, content), [editMessage])
   const handleDeleteMessage = useCallback((id: string) => deleteMessage(id), [deleteMessage])
-  const handleAddReaction = useCallback((messageId: string, reaction: string) => addReaction(messageId, reaction, username), [addReaction, username])
+  const handleAddReaction = useCallback((messageId: string, reaction: string) => {
+    addReaction(messageId, reaction, username)
+    // Dispatch bot event pour les triggers de réaction
+    if (activeServerId && currentChannel) {
+      dispatchBotEvent({
+        type: 'reaction',
+        serverId: activeServerId,
+        channelId: currentChannel.id,
+        channelName: currentChannel.name,
+        authorId: username,
+        authorName: username,
+        emoji: reaction,
+        messageId,
+      })
+    }
+  }, [addReaction, username, activeServerId, currentChannel, dispatchBotEvent])
   const handleRemoveReaction = useCallback((messageId: string, reaction: string) => removeReaction(messageId, reaction, username), [removeReaction, username])
 
   // ── Handlers amis / DMs ──
@@ -352,6 +452,8 @@ function App() {
                 currentChannel={currentChannel}
                 setCurrentChannel={setCurrentChannel}
                 serverName={activeServer?.name}
+                serverBannerUrl={serverBannerUrl}
+                serverBannerColor={serverBannerColor}
                 onOpenSettings={() => setShowServerSettings(true)}
                 onEditChannel={ch => setEditingChannel(ch)}
                 onCreateChannel={createChannel}
@@ -416,6 +518,7 @@ function App() {
                       watchingStream={watchingStream} videoRef={videoRef}
                       onStartStream={startStream} onStopStream={stopStream}
                       onWatchStream={watchStream} onStopWatching={stopWatching}
+                      onTogglePip={setStreamPipActive}
                       isCameraOn={isCameraOn} cameraVideoRef={cameraVideoRef}
                       onToggleCamera={toggleCamera} voiceUsers={voiceUsers}
                       voiceFull={voiceFull} onLeaveVoice={handleLeaveVoice}
@@ -588,6 +691,18 @@ function App() {
           />
         </div>
       )}
+
+      {/* Vignette flottante stream — local + remote PIP */}
+      <StreamPip
+        screenStream={screenStream}
+        isStreaming={isStreaming}
+        onStopStream={stopStream}
+        remoteVideoRef={videoRef}
+        watchingStream={watchingStream}
+        onStopWatching={stopWatching}
+        pipActive={streamPipActive}
+        onTogglePip={setStreamPipActive}
+      />
 
     </div>
   )

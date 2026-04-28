@@ -14,8 +14,9 @@ import type { Message } from './types'
 
 interface AutoModConfig {
   words: string
-  action: 'delete' | 'warn' | 'both'
+  action: 'delete' | 'warn' | 'both' | 'tempban'
   enabled: boolean
+  banDuration?: number // minutes
 }
 
 function useSocket(channelId: string, username: string, serverId: string, myProfile?: any) {
@@ -149,15 +150,15 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
   const checkAutoMod = (content: string): boolean => {
     const cfg = automodRef.current
     if (!cfg || !cfg.enabled || !cfg.words.trim()) return false
-    const banned = cfg.words.split(',').map(w => w.trim().toLowerCase()).filter(Boolean)
-    const hit = banned.some(w => content.toLowerCase().includes(w))
+    const bannedWords = cfg.words.split(',').map(w => w.trim().toLowerCase()).filter(Boolean)
+    const hit = bannedWords.some(w => content.toLowerCase().includes(w))
     if (!hit) return false
-    if (cfg.action === 'warn' || cfg.action === 'both') {
+
+    const showWarn = (text: string, color = '#f0b232') => {
       const warnId = 'warn_' + Date.now()
       const warn: Message = {
         id: warnId, author: '🛡️ AutoMod',
-        content: '⚠️ Ton message contient un mot interdit et a été bloqué.',
-        color: '#f0b232',
+        content: text, color,
         time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
         timestamp: Date.now(),
       }
@@ -166,7 +167,23 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
       setTimeout(() => {
         delete msgsRef.current[warnId]
         setMessages(sortMsgs(msgsRef.current))
-      }, 5000)
+      }, 6000)
+    }
+
+    if (cfg.action === 'tempban') {
+      const durationMin = cfg.banDuration || 10
+      const bannedUntil = Date.now() + durationMin * 60 * 1000
+      // Écrire le ban temporaire dans GunDB — useMembers le détecte
+      gun.get('tempbans').get(serverId).get(username).put({ bannedUntil, reason: 'AutoMod' })
+      showWarn(
+        `🚫 Tu as été banni temporairement pendant ${durationMin < 60 ? `${durationMin} min` : `${durationMin / 60}h`} pour avoir utilisé un mot interdit.`,
+        '#ed4245'
+      )
+      return true
+    }
+
+    if (cfg.action === 'warn' || cfg.action === 'both') {
+      showWarn('⚠️ Ton message contient un mot interdit et a été bloqué.')
     }
     return cfg.action === 'delete' || cfg.action === 'both'
   }
@@ -251,7 +268,5 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
     addReaction, removeReaction, sendTyping,
   }
 }
-
-export default useSocket
 
 export default useSocket

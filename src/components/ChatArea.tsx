@@ -10,9 +10,10 @@ import GifPicker from './GifPicker'
 import EmojiPicker from './EmojiPicker'
 import useServerEmojis from '../useServerEmojis'
 import { getAvatarGradient } from '../utils/avatarGradient'
-import { UPLOAD_URL } from '../config'
+import { seedBrowserFile } from '../torrentBridge'
 
-const ACCEPTED_TYPES = 'image/*,video/mp4,video/webm,application/pdf,text/plain,application/zip'
+const ACCEPTED_TYPES = 'image/*,video/mp4,video/webm,application/pdf,text/plain,application/zip,.zip,.rar,.7z'
+const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024 // 2 GB
 
 interface Props {
   channel: Channel | null
@@ -127,23 +128,21 @@ function ChatArea({
     ? filteredMessages
     : filteredMessages.slice(-displayLimit)
 
-  // ── Upload fichier vers le serveur ──
+  // ── Envoi fichier P2P via WebTorrent (seed → magnet link dans le chat) ──
   const uploadFile = useCallback(async (file: File) => {
     if (!channel) return
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`Fichier trop volumineux (max 2 Go) : ${(file.size / 1024 / 1024).toFixed(1)} Mo`)
+      return
+    }
     setUploading(true)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch(UPLOAD_URL, { method: 'POST', body: formData })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || `Erreur ${res.status}`)
-      }
-      const data = await res.json()
-      onSendMessage('', undefined, data.url, data.name, data.type, data.size)
+      const result = await seedBrowserFile(file)
+      // Envoyer le magnet comme message avec métadonnées
+      onSendMessage('', undefined, result.magnetUri, file.name, file.type, file.size)
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Upload échoué'
-      alert(msg)
+      const msg = e instanceof Error ? e.message : 'Erreur lors du partage'
+      alert('Impossible de partager le fichier : ' + msg)
     } finally {
       setUploading(false)
     }
@@ -320,44 +319,67 @@ function ChatArea({
     return nodes
   }
 
-  // ── Rendu pièce jointe ──
+  // ── Rendu pièce jointe (P2P WebTorrent ou ancienne URL) ──
   const renderAttachment = (msg: Message) => {
     if (!msg.fileUrl) return null
-    if (msg.fileType?.startsWith('image/')) {
+
+    const isMagnet = msg.fileUrl.startsWith('magnet:')
+
+    // Fichier P2P via magnet link
+    if (isMagnet) {
+      const icon = msg.fileType?.startsWith('image/') ? '🖼️'
+        : msg.fileType?.startsWith('video/') ? '🎬'
+        : msg.fileType === 'application/pdf' ? '📄'
+        : msg.fileType === 'application/zip' || msg.fileType?.includes('zip') ? '🗜️'
+        : msg.fileType === 'text/plain' ? '📝'
+        : '📎'
+      const sizeLabel = msg.fileSize
+        ? msg.fileSize > 1024 * 1024
+          ? `${(msg.fileSize / 1024 / 1024).toFixed(1)} Mo`
+          : `${(msg.fileSize / 1024).toFixed(0)} Ko`
+        : ''
       return (
-        <img
-          src={msg.fileUrl}
-          alt={msg.fileName}
-          className="msg-attachment-img"
-        />
+        <div className="msg-attachment-p2p">
+          <div className="msg-attachment-p2p-icon">{icon}</div>
+          <div className="msg-attachment-p2p-info">
+            <div className="msg-attachment-p2p-name">{msg.fileName || 'Fichier'}</div>
+            <div className="msg-attachment-p2p-meta">
+              {sizeLabel && <span>{sizeLabel}</span>}
+              <span className="msg-attachment-p2p-badge">🔗 P2P</span>
+            </div>
+          </div>
+          <button
+            className="msg-attachment-p2p-btn"
+            title="Télécharger via P2P"
+            onClick={async () => {
+              try {
+                const { downloadTorrent } = await import('../torrentBridge')
+                await downloadTorrent(msg.fileUrl!)
+              } catch (e: any) {
+                alert('Erreur téléchargement : ' + (e?.message || e))
+              }
+            }}
+          >⬇ Télécharger</button>
+        </div>
       )
+    }
+
+    // Ancienne URL directe (rétro-compatibilité)
+    if (msg.fileType?.startsWith('image/')) {
+      return <img src={msg.fileUrl} alt={msg.fileName} className="msg-attachment-img" />
     }
     if (msg.fileType?.startsWith('video/')) {
-      return (
-        <video
-          src={msg.fileUrl}
-          controls
-          className="msg-attachment-video"
-        />
-      )
+      return <video src={msg.fileUrl} controls className="msg-attachment-video" />
     }
-    const icon = msg.fileType === 'application/pdf' ? '📄'
+    const icon2 = msg.fileType === 'application/pdf' ? '📄'
       : msg.fileType === 'application/zip' ? '🗜️'
       : msg.fileType === 'text/plain' ? '📝'
       : '📎'
     return (
-      <a
-        href={msg.fileUrl}
-        download={msg.fileName}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="msg-attachment-file"
-      >
-        <span className="msg-attachment-icon">{icon}</span>
+      <a href={msg.fileUrl} download={msg.fileName} target="_blank" rel="noopener noreferrer" className="msg-attachment-file">
+        <span className="msg-attachment-icon">{icon2}</span>
         <span className="msg-attachment-name">{msg.fileName}</span>
-        <span className="msg-attachment-size">
-          {msg.fileSize ? `${(msg.fileSize / 1024).toFixed(0)} Ko` : ''}
-        </span>
+        <span className="msg-attachment-size">{msg.fileSize ? `${(msg.fileSize / 1024).toFixed(0)} Ko` : ''}</span>
         <span className="msg-attachment-dl">⬇</span>
       </a>
     )

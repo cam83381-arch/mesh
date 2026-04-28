@@ -523,7 +523,7 @@ function useStream(username: string, voiceSettings?: {
 
   return {
     isStreaming, streamers, watchingStream,
-    videoRef, startStream, stopStream, watchStream, stopWatching,
+    videoRef, screenStream, startStream, stopStream, watchStream, stopWatching,
     isCameraOn, cameraVideoRef, toggleCamera,
     voiceUsers, voiceFull, joinVoice, leaveVoice,
     isMuted, isDeafened, toggleMute, toggleDeafen,

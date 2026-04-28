@@ -14,6 +14,8 @@ interface Props {
   setCurrentChannel: (channel: Channel) => void
   categories?: Category[]
   serverName?: string
+  serverBannerUrl?: string
+  serverBannerColor?: string
   onOpenSettings?: () => void
   onEditChannel?: (channel: Channel) => void
   onCreateChannel?: (name: string, type: 'text' | 'voice', categoryId?: string) => void
@@ -72,7 +74,7 @@ const IconAdd = () => (
   </svg>
 )
 
-function ChannelSidebar({ channels, currentChannel, setCurrentChannel, categories = [], serverName, onOpenSettings, onEditChannel, onCreateChannel, onDeleteChannel, unreadByChannel = {}, footer, onSplitView, onSplitRight, isSplitView, canAccessChannel, voicePresence = {}, activeVoiceChannelId, currentUsername }: Props) {
+function ChannelSidebar({ channels, currentChannel, setCurrentChannel, categories = [], serverName, serverBannerUrl, serverBannerColor, onOpenSettings, onEditChannel, onCreateChannel, onDeleteChannel, unreadByChannel = {}, footer, onSplitView, onSplitRight, isSplitView, canAccessChannel, voicePresence = {}, activeVoiceChannelId, currentUsername }: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [creating, setCreating] = useState<{ categoryId?: string; type: 'text' | 'voice' } | null>(null)
   const [newName, setNewName] = useState('')
@@ -259,6 +261,18 @@ function ChannelSidebar({ channels, currentChannel, setCurrentChannel, categorie
 
   return (
     <div className="cs-sidebar" onClick={() => setShowServerMenu(false)}>
+      {/* Bannière serveur */}
+      {(serverBannerUrl || serverBannerColor) && (
+        <div
+          className="cs-server-banner"
+          style={{
+            background: serverBannerUrl
+              ? `url(${serverBannerUrl}) center/cover no-repeat`
+              : serverBannerColor,
+          }}
+        />
+      )}
+
       {/* Server Header */}
       <div
         className={`cs-server-header${showServerMenu ? ' open' : ''}`}

@@ -1,79 +1,133 @@
-import { useState, useMemo } from 'react'
+/**
+ * GifPicker.tsx — Vrai picker GIF via Tenor API v2
+ * Clé demo publique Google/Tenor (usage limité, pour dev/prod léger)
+ */
 
-// Stickers animés CSS — pas besoin d'URLs externes
-// Chaque "GIF" est un emoji + texte envoyé dans le chat
-const STICKER_LIBRARY: Record<string, Array<{ id: string; title: string; emoji: string; text: string }>> = {
-  'Tendance': [
-    { id: 'ok1',       title: 'OK',        emoji: '👌', text: '👌 OK!' },
-    { id: 'yes1',      title: 'Oui !',     emoji: '✅', text: '✅ OUI !' },
-    { id: 'no1',       title: 'Non !',     emoji: '❌', text: '❌ NON !' },
-    { id: 'wave1',     title: 'Salut !',   emoji: '👋', text: '👋 Salut !' },
-    { id: 'bye1',      title: 'Ciao !',    emoji: '🤙', text: '🤙 Ciao !' },
-    { id: 'clap1',     title: 'Bravo !',   emoji: '👏', text: '👏 Bravo !' },
-    { id: 'think1',    title: 'Hmm...',    emoji: '🤔', text: '🤔 Hmm...' },
-    { id: 'omg1',      title: 'OMG !',     emoji: '😱', text: '😱 OMG !' },
-    { id: 'lol1',      title: 'LOL',       emoji: '😂', text: '😂 LOL' },
-  ],
-  'Réactions': [
-    { id: 'love1',      title: 'Amour',    emoji: '❤️',  text: '❤️ ' },
-    { id: 'fire1',      title: 'Fire !',   emoji: '🔥',  text: '🔥 FIRE !' },
-    { id: 'gg1',        title: 'GG !',     emoji: '🏆',  text: '🏆 GG !' },
-    { id: 'facepalm1',  title: 'Facepalm', emoji: '🤦',  text: '🤦 Facepalm...' },
-    { id: 'sus1',       title: 'Sus',      emoji: '👀',  text: '👀 Sus...' },
-    { id: 'party1',     title: 'Fête !',   emoji: '🎉',  text: '🎉 Let\'s go !' },
-    { id: 'pog1',       title: 'POG !',    emoji: '😮',  text: '😮 POG !' },
-    { id: 'sad1',       title: 'Triste',   emoji: '😢',  text: '😢 ...' },
-    { id: 'angry1',     title: 'Noooon',   emoji: '😤',  text: '😤 NOOOON' },
-  ],
-  'Gaming': [
-    { id: 'win1',     title: 'Win !',      emoji: '🥇', text: '🥇 WIN !' },
-    { id: 'lose1',    title: 'Lose...',    emoji: '💀', text: '💀 rip...' },
-    { id: 'rage1',    title: 'Rage quit',  emoji: '🎮', text: '🎮💢 RAGE QUIT' },
-    { id: 'letsgo1',  title: "Let's go !", emoji: '⚡', text: '⚡ LET\'S GOOO !' },
-    { id: 'noob1',    title: 'Noob',       emoji: '🐣', text: '🐣 noob...' },
-    { id: 'pro1',     title: 'Pro move',   emoji: '😎', text: '😎 PRO MOVE' },
-    { id: 'rekt1',    title: 'Rekt !',     emoji: '💥', text: '💥 REKT !' },
-    { id: 'afk1',     title: 'AFK',        emoji: '🚶', text: '🚶 AFK' },
-  ],
-  'Memes': [
-    { id: 'nyan1',   title: 'Nyan Cat',      emoji: '🌈', text: '🌈🐱 NYAN CAT !' },
-    { id: 'fine1',   title: 'This is fine',  emoji: '🐶', text: '🐶🔥 This is fine.' },
-    { id: 'deal1',   title: 'Deal with it',  emoji: '😎', text: '😎 Deal with it.' },
-    { id: 'doge1',   title: 'Wow doge',      emoji: '🐕', text: '🐕 wow. such amaze.' },
-    { id: 'brain1',  title: 'Big brain',     emoji: '🧠', text: '🧠 BIG BRAIN' },
-    { id: 'roll1',   title: 'Rickroll',      emoji: '🎵', text: '🎵 Never gonna give you up~' },
-    { id: 'stonks1', title: 'Stonks',        emoji: '📈', text: '📈 STONKS' },
-    { id: 'flip1',   title: 'Table flip',    emoji: '😤', text: '(╯°□°）╯︵ ┻━┻' },
-  ],
+import { useState, useEffect, useRef, useCallback } from 'react'
+
+const TENOR_KEY = 'AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY'
+const TENOR_BASE = 'https://tenor.googleapis.com/v2'
+const LIMIT = 24
+
+// Catégories tendance avec terme de recherche associé
+const CATEGORIES = [
+  { label: '🔥 Tendance',  query: '' },          // featured
+  { label: '😂 LOL',       query: 'lol funny' },
+  { label: '👋 Salut',     query: 'hello wave' },
+  { label: '❤️ Love',      query: 'love heart' },
+  { label: '😤 Rage',      query: 'angry rage' },
+  { label: '🎉 Fête',      query: 'party celebrate' },
+  { label: '🐱 Animaux',   query: 'cute animals' },
+  { label: '🎮 Gaming',    query: 'gaming win' },
+  { label: '🧠 Big Brain', query: 'smart think' },
+]
+
+interface TenorGif {
+  id: string
+  title: string
+  url: string       // URL du GIF à afficher
+  preview: string   // tiny preview (tinygif)
+  width: number
+  height: number
 }
 
-const ALL_STICKERS = Object.values(STICKER_LIBRARY).flat()
+function parseTenorResults(data: any): TenorGif[] {
+  if (!data?.results) return []
+  return data.results.map((r: any) => {
+    const med = r.media_formats || {}
+    const gif = med.tinygif || med.gif || med.mediumgif || {}
+    const preview = med.nanogif || med.tinygif || {}
+    return {
+      id: r.id,
+      title: r.title || '',
+      url: gif.url || '',
+      preview: preview.url || gif.url || '',
+      width: gif.dims?.[0] || 100,
+      height: gif.dims?.[1] || 100,
+    }
+  }).filter((g: TenorGif) => g.url)
+}
+
+async function fetchTenor(endpoint: string, params: Record<string, string>): Promise<TenorGif[]> {
+  const url = new URL(`${TENOR_BASE}/${endpoint}`)
+  url.searchParams.set('key', TENOR_KEY)
+  url.searchParams.set('limit', String(LIMIT))
+  url.searchParams.set('media_filter', 'tinygif,nanogif')
+  url.searchParams.set('contentfilter', 'medium')
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Tenor ${res.status}`)
+  return parseTenorResults(await res.json())
+}
 
 interface Props {
-  onSelect: (text: string) => void
+  onSelect: (gifUrl: string) => void
   onClose: () => void
 }
 
 function GifPicker({ onSelect, onClose }: Props) {
   const [query, setQuery] = useState('')
-  const [activeCategory, setActiveCategory] = useState<string>('Tendance')
+  const [activeCat, setActiveCat] = useState(0)
+  const [gifs, setGifs] = useState<TenorGif[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const displayStickers = useMemo(() => {
-    if (query.trim()) {
-      const q = query.toLowerCase()
-      return ALL_STICKERS.filter(s => s.title.toLowerCase().includes(q) || s.text.toLowerCase().includes(q))
+
+  const load = useCallback(async (q: string, catIndex: number) => {
+    setLoading(true)
+    setError('')
+    setGifs([])
+    try {
+      let results: TenorGif[]
+      if (q.trim()) {
+        results = await fetchTenor('search', { q: q.trim() })
+      } else {
+        const catQuery = CATEGORIES[catIndex].query
+        if (catQuery) {
+          results = await fetchTenor('search', { q: catQuery })
+        } else {
+          results = await fetchTenor('featured', {})
+        }
+      }
+      setGifs(results)
+    } catch (e: any) {
+      setError('Impossible de charger les GIFs. Vérifie ta connexion.')
+    } finally {
+      setLoading(false)
     }
-    return STICKER_LIBRARY[activeCategory] || []
-  }, [query, activeCategory])
+  }, [])
+
+  // Chargement initial
+  useEffect(() => {
+    load('', activeCat)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Changement de catégorie
+  const handleCatChange = (i: number) => {
+    setActiveCat(i)
+    setQuery('')
+    load('', i)
+  }
+
+  // Recherche avec debounce 400ms
+  const handleSearch = (val: string) => {
+    setQuery(val)
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      load(val, activeCat)
+    }, 400)
+  }
 
   return (
     <div className="gif-picker">
+      {/* Header recherche */}
       <div className="gif-picker-header">
         <input
           className="gif-search-input"
-          placeholder="🔍 Rechercher un sticker…"
+          placeholder="🔍 Rechercher un GIF…"
           value={query}
-          onChange={e => setQuery(e.target.value)}
+          onChange={e => handleSearch(e.target.value)}
           autoFocus
         />
         <button className="gif-close-btn" onClick={onClose} title="Fermer">✕</button>
@@ -81,62 +135,49 @@ function GifPicker({ onSelect, onClose }: Props) {
 
       {/* Catégories */}
       {!query && (
-        <div style={{
-          display: 'flex', gap: '4px', padding: '6px 8px',
-          borderBottom: '1px solid #1e1f22', overflowX: 'auto', flexShrink: 0
-        }}>
-          {Object.keys(STICKER_LIBRARY).map(cat => (
+        <div className="gif-categories">
+          {CATEGORIES.map((cat, i) => (
             <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              style={{
-                padding: '4px 10px', borderRadius: '12px', border: 'none',
-                background: activeCategory === cat ? '#6354ff' : '#404249',
-                color: activeCategory === cat ? '#fff' : '#8884c4',
-                fontSize: '12px', fontWeight: 500, cursor: 'pointer',
-                whiteSpace: 'nowrap', transition: 'background 0.15s'
-              }}
+              key={cat.label}
+              className={`gif-cat-btn${activeCat === i ? ' active' : ''}`}
+              onClick={() => handleCatChange(i)}
             >
-              {cat}
+              {cat.label}
             </button>
           ))}
         </div>
       )}
 
+      {/* Grille GIFs */}
       <div className="gif-body">
-        {displayStickers.length === 0 ? (
-          <div className="gif-status">Aucun sticker trouvé{query ? ` pour "${query}"` : ''}</div>
-        ) : (
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: '6px', padding: '8px'
-          }}>
-            {displayStickers.map(sticker => (
+        {loading && (
+          <div className="gif-status">
+            <div className="gif-loading-dots">
+              <span/><span/><span/>
+            </div>
+          </div>
+        )}
+        {error && !loading && (
+          <div className="gif-status gif-error">{error}</div>
+        )}
+        {!loading && !error && gifs.length === 0 && (
+          <div className="gif-status">Aucun GIF trouvé{query ? ` pour "${query}"` : ''}</div>
+        )}
+        {!loading && gifs.length > 0 && (
+          <div className="gif-grid">
+            {gifs.map(gif => (
               <button
-                key={sticker.id}
-                onClick={() => { onSelect(sticker.text); onClose() }}
-                title={sticker.title}
-                style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  gap: '4px', padding: '12px 6px',
-                  background: '#141428', border: '1px solid #1e1f22',
-                  borderRadius: '8px', cursor: 'pointer',
-                  transition: 'background 0.15s, border-color 0.15s',
-                  minHeight: '70px',
-                }}
-                onMouseEnter={e => {
-                  (e.currentTarget as HTMLButtonElement).style.background = '#404249'
-                  ;(e.currentTarget as HTMLButtonElement).style.borderColor = '#6354ff'
-                }}
-                onMouseLeave={e => {
-                  (e.currentTarget as HTMLButtonElement).style.background = '#141428'
-                  ;(e.currentTarget as HTMLButtonElement).style.borderColor = '#0b0b18'
-                }}
+                key={gif.id}
+                className="gif-item"
+                onClick={() => { onSelect(gif.url); onClose() }}
+                title={gif.title || 'GIF'}
               >
-                <span style={{ fontSize: '28px', lineHeight: 1 }}>{sticker.emoji}</span>
-                <span style={{ fontSize: '10px', color: '#8884c4', textAlign: 'center', lineHeight: 1.2 }}>
-                  {sticker.title}
-                </span>
+                <img
+                  src={gif.preview}
+                  alt={gif.title}
+                  loading="lazy"
+                  className="gif-item-img"
+                />
               </button>
             ))}
           </div>
@@ -144,7 +185,12 @@ function GifPicker({ onSelect, onClose }: Props) {
       </div>
 
       <div className="gif-footer">
-        <span>✨ Stickers intégrés</span>
+        <img
+          src="https://tenor.com/assets/img/badges/tenor-badge-9x3.svg"
+          alt="Powered by Tenor"
+          className="gif-tenor-badge"
+          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+        />
       </div>
     </div>
   )

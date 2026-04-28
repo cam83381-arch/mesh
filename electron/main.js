@@ -445,3 +445,159 @@ ipcMain.handle('delete-local-file', (_event, filename) => {
     return true
   } catch { return false }
 })
+
+// ── IPC : WebTorrent P2P file transfer ──
+let wt = null
+const activeTorrents = {} // infoHash → { torrent, expiryTimer }
+const TORRENT_TMP_DIR = path.join(app.getPath('userData'), 'torrent-tmp')
+const TORRENT_DL_DIR = app.getPath('downloads')
+
+function getWT() {
+  if (!wt) {
+    try {
+      const WebTorrent = require('webtorrent')
+      wt = new WebTorrent()
+      wt.on('error', (err) => console.warn('[WebTorrent]', err.message))
+    } catch (e) {
+      console.error('[WebTorrent] Impossible de charger:', e.message)
+    }
+  }
+  return wt
+}
+
+function ensureTorrentTmpDir() {
+  if (!fs.existsSync(TORRENT_TMP_DIR)) fs.mkdirSync(TORRENT_TMP_DIR, { recursive: true })
+}
+
+// Seed un fichier déjà sur disque
+ipcMain.handle('torrent-seed', async (_event, filePath, expiryMs) => {
+  return new Promise((resolve, reject) => {
+    const client = getWT()
+    if (!client) return reject(new Error('WebTorrent non disponible'))
+    client.seed(filePath, (torrent) => {
+      const result = {
+        magnetUri: torrent.magnetURI,
+        infoHash: torrent.infoHash,
+        name: torrent.name,
+        size: torrent.length,
+      }
+      // Expiration automatique du seeding
+      let expiryTimer = null
+      if (expiryMs > 0) {
+        expiryTimer = setTimeout(() => {
+          try { torrent.destroy() } catch {}
+          delete activeTorrents[torrent.infoHash]
+        }, expiryMs)
+      }
+      activeTorrents[torrent.infoHash] = { torrent, expiryTimer }
+      resolve(result)
+    })
+  })
+})
+
+// Seed un fichier reçu comme buffer depuis le renderer (File browser object)
+ipcMain.handle('torrent-seed-buffer', async (_event, { name, buffer, expiryMs }) => {
+  return new Promise((resolve, reject) => {
+    const client = getWT()
+    if (!client) return reject(new Error('WebTorrent non disponible'))
+    ensureTorrentTmpDir()
+    // Écrire le buffer sur disque dans le dossier tmp
+    const tmpPath = path.join(TORRENT_TMP_DIR, name)
+    try {
+      fs.writeFileSync(tmpPath, Buffer.from(buffer))
+    } catch (e) {
+      return reject(new Error('Impossible d\'écrire le fichier temporaire: ' + e.message))
+    }
+    client.seed(tmpPath, (torrent) => {
+      const result = {
+        magnetUri: torrent.magnetURI,
+        infoHash: torrent.infoHash,
+        name: torrent.name,
+        size: torrent.length,
+      }
+      let expiryTimer = null
+      if (expiryMs > 0) {
+        expiryTimer = setTimeout(() => {
+          try { torrent.destroy() } catch {}
+          try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch {}
+          delete activeTorrents[torrent.infoHash]
+        }, expiryMs)
+      }
+      activeTorrents[torrent.infoHash] = { torrent, expiryTimer, tmpPath }
+      resolve(result)
+    })
+  })
+})
+
+// Télécharger un torrent via magnet link
+ipcMain.handle('torrent-download', async (_event, magnetUri) => {
+  return new Promise((resolve, reject) => {
+    const client = getWT()
+    if (!client) return reject(new Error('WebTorrent non disponible'))
+    // Vérifier si déjà en cours
+    const existing = client.get(magnetUri)
+    if (existing) {
+      return resolve({
+        progress: existing.progress,
+        downloadSpeed: existing.downloadSpeed,
+        uploadSpeed: existing.uploadSpeed,
+        peers: existing.numPeers,
+        done: existing.done,
+        path: existing.done ? existing.files[0]?.path : undefined,
+      })
+    }
+    client.add(magnetUri, { path: TORRENT_DL_DIR }, (torrent) => {
+      activeTorrents[torrent.infoHash] = { torrent, expiryTimer: null }
+      torrent.on('done', () => {
+        // Ouvrir le dossier Downloads une fois terminé
+        shell.showItemInFolder(torrent.files[0]?.path || TORRENT_DL_DIR)
+      })
+      resolve({
+        progress: torrent.progress,
+        downloadSpeed: torrent.downloadSpeed,
+        uploadSpeed: torrent.uploadSpeed,
+        peers: torrent.numPeers,
+        done: torrent.done,
+        path: torrent.done ? torrent.files[0]?.path : undefined,
+      })
+    })
+  })
+})
+
+// Progression d'un torrent
+ipcMain.handle('torrent-progress', (_event, infoHash) => {
+  const entry = activeTorrents[infoHash]
+  if (!entry) return null
+  const t = entry.torrent
+  return {
+    progress: t.progress,
+    downloadSpeed: t.downloadSpeed,
+    uploadSpeed: t.uploadSpeed,
+    peers: t.numPeers,
+    done: t.done,
+    path: t.done && t.files?.[0] ? t.files[0].path : undefined,
+  }
+})
+
+// Arrêter un torrent
+ipcMain.handle('torrent-stop', (_event, infoHash) => {
+  const entry = activeTorrents[infoHash]
+  if (!entry) return
+  if (entry.expiryTimer) clearTimeout(entry.expiryTimer)
+  try { entry.torrent.destroy() } catch {}
+  if (entry.tmpPath) {
+    try { if (fs.existsSync(entry.tmpPath)) fs.unlinkSync(entry.tmpPath) } catch {}
+  }
+  delete activeTorrents[infoHash]
+})
+
+// Arrêter tous les torrents (fermeture app)
+ipcMain.handle('torrent-stop-all', () => {
+  Object.values(activeTorrents).forEach(({ torrent, expiryTimer, tmpPath }) => {
+    if (expiryTimer) clearTimeout(expiryTimer)
+    try { torrent.destroy() } catch {}
+    if (tmpPath) { try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch {} }
+  })
+  Object.keys(activeTorrents).forEach(k => delete activeTorrents[k])
+  if (wt) { try { wt.destroy() } catch {}; wt = null }
+})

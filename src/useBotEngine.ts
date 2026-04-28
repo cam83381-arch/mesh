@@ -41,6 +41,8 @@ interface BotContext {
   addReaction: (messageId: string, emoji: string) => void
   deleteMessage: (messageId: string) => void
   kickMember: (username: string) => void
+  banMember: (username: string) => void
+  pinMessage: (messageId: string) => void
   assignRole: (username: string, role: string) => void
   removeRole: (username: string, role: string) => void
   channels: { id: string; name: string }[]
@@ -140,12 +142,20 @@ async function execAction(node: Node, ctx: BotContext): Promise<void> {
       if (ctx.event.authorName) ctx.kickMember(ctx.event.authorName)
       break
     }
+    case 'action_ban': {
+      if (ctx.event.authorName) ctx.banMember(ctx.event.authorName)
+      break
+    }
     case 'action_add_role': {
       if (ctx.event.authorName && config.role) ctx.assignRole(ctx.event.authorName, config.role)
       break
     }
     case 'action_remove_role': {
       if (ctx.event.authorName && config.role) ctx.removeRole(ctx.event.authorName, config.role)
+      break
+    }
+    case 'action_pin_message': {
+      if (ctx.event.messageId) ctx.pinMessage(ctx.event.messageId)
       break
     }
     case 'action_wait': {
@@ -173,6 +183,28 @@ function execVariable(node: Node, ctx: BotContext): void {
       break
     case 'variable_get':
       break // déjà accessible via ctx.variables
+    case 'variable_list_add': {
+      const listKey = `__list_${config.list || 'default'}`
+      const existing: string[] = JSON.parse(String(ctx.variables[listKey] || '[]'))
+      const val = resolveTemplate(config.value || '', ctx)
+      if (!existing.includes(val)) existing.push(val)
+      ctx.variables[listKey] = JSON.stringify(existing)
+      break
+    }
+    case 'variable_list_remove': {
+      const listKey = `__list_${config.list || 'default'}`
+      const existing: string[] = JSON.parse(String(ctx.variables[listKey] || '[]'))
+      const val = resolveTemplate(config.value || '', ctx)
+      ctx.variables[listKey] = JSON.stringify(existing.filter(v => v !== val))
+      break
+    }
+    case 'variable_list_contains': {
+      const listKey = `__list_${config.list || 'default'}`
+      const existing: string[] = JSON.parse(String(ctx.variables[listKey] || '[]'))
+      const val = resolveTemplate(config.value || '', ctx)
+      ctx.variables[`__contains_${config.list || 'default'}`] = existing.includes(val) ? '1' : '0'
+      break
+    }
     default:
       break
   }
@@ -260,10 +292,18 @@ function triggerMatches(triggerNode: Node, event: BotEvent): boolean {
       if (event.type !== 'message') return false
       if (config.channel && config.channel !== event.channelName) return false
       return true
-    case 'trigger_command':
-      if (event.type !== 'message') return false
+    case 'trigger_command': {
+      if (event.type !== 'message' && event.type !== 'command') return false
       const prefix = config.prefix || '!'
-      return (event.content || '').startsWith(prefix)
+      // Support both full prefix match (e.g. "!help") and prefix-only (e.g. "!")
+      const content = event.content || ''
+      if (prefix.length > 1 && !prefix.startsWith('!')) {
+        // prefix is a full command like "!help" — match exactly the command name
+        return content.toLowerCase().startsWith(prefix.toLowerCase())
+      }
+      // prefix is just the sigil — match any command starting with it
+      return content.startsWith(prefix)
+    }
     case 'trigger_member_join':
       return event.type === 'member_join'
     case 'trigger_member_leave':
@@ -292,6 +332,8 @@ interface BotEngineOptions {
   onAddReaction: (messageId: string, emoji: string) => void
   onDeleteMessage: (messageId: string) => void
   onKickMember: (username: string) => void
+  onBanMember: (username: string) => void
+  onPinMessage: (messageId: string) => void
   onAssignRole: (username: string, role: string) => void
   onRemoveRole: (username: string, role: string) => void
 }
@@ -359,6 +401,8 @@ export function useBotEngine(opts: BotEngineOptions) {
           addReaction: o.onAddReaction,
           deleteMessage: o.onDeleteMessage,
           kickMember: o.onKickMember,
+          banMember: o.onBanMember,
+          pinMessage: o.onPinMessage,
           assignRole: o.onAssignRole,
           removeRole: o.onRemoveRole,
         }
@@ -388,6 +432,8 @@ export function useBotEngine(opts: BotEngineOptions) {
           addReaction: o.onAddReaction,
           deleteMessage: o.onDeleteMessage,
           kickMember: o.onKickMember,
+          banMember: o.onBanMember,
+          pinMessage: o.onPinMessage,
           assignRole: o.onAssignRole,
           removeRole: o.onRemoveRole,
         }

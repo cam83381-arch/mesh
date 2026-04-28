@@ -7,8 +7,9 @@ export interface Server {
   // Champs extra (stockes dans GunDB, charges depuis ServerSettings)
   iconUrl?: string
   bannerColor?: string
+  bannerUrl?: string    // image uploadée (base64 ou URL)
   description?: string
-  tags?: string
+  tags?: string         // virgule-séparé, max 5
 }
 
 export interface Category {
@@ -89,6 +90,9 @@ export interface Message {
   fileName?: string
   fileType?: string
   fileSize?: number
+  // P2P via WebTorrent
+  magnetUri?: string
+  torrentExpiry?: number    // timestamp expiration seeding
 }
 
 export type Role = 'owner' | 'admin' | 'moderator' | 'member' | 'banned'

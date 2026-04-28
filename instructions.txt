@@ -1,7 +1,7 @@
 ================================================================================
                            MESH PROJECT - INSTRUCTIONS
                     A P2P Desktop Clone of Discord (Electron)
-                              Last Updated: 2026-04-16
+                              Last Updated: 2026-04-28
 ================================================================================
 
 ┌─ PROJECT IDENTITY ──────────────────────────────────────────────────────────┐
@@ -9,49 +9,59 @@
 │ Type: Desktop-only (Electron). NO web/mobile versions.                     │
 │ Tagline: Decentralized Discord. Your data, your server.                    │
 │ Tech Stack: Electron 34 + React 19 + TypeScript + Vite 8 + GunDB + WebRTC │
-│ Networking: P2P mesh (GunDB CRDT) + WebRTC direct peer-to-peer            │
+│ Networking: Trystero (BitTorrent trackers) + WebRTC DataChannels + GunDB   │
 │ Build Output: dist/ (frontend) + release/ (electron distributable)         │
+│ Current version: 1.3.0                                                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ CRITICAL ARCHITECTURE ─────────────────────────────────────────────────────┐
+┌─ CRITICAL ARCHITECTURE (v1.3.x — PURE P2P, NO CENTRAL SERVER) ─────────────┐
 │                                                                             │
-│ BACKEND PROCESS:                                                           │
-│  - Node.js server forked via Electron fork() → runs in background         │
-│  - File: server/index.js (Express + Socket.io + GunDB relay)              │
-│  - Listens on localhost:3001 (hardcoded everywhere)                       │
-│  - Duties: GunDB relay, Socket.io WebSocket, REST webhook API, bot engine │
-│  - Loads: botEngine.js (runtime for bots)                                  │
+│ TRANSPORT STACK:                                                            │
+│  1. Trystero (@trystero/torrent) → signaling via trackers BitTorrent publics│
+│     Trackers: wss://tracker.openwebtorrent.com                             │
+│               wss://tracker.btorrent.xyz                                   │
+│               wss://tracker.fastcast.nz                                    │
+│               wss://tracker.webtorrent.dev                                 │
+│  2. WebRTC DataChannels → transport réel (messages, réactions, profils)    │
+│  3. GunDB radisk → persistance locale (AppData/Roaming/Mesh/radata/)       │
+│  4. localStore.ts → AppData/Roaming/Mesh/mesh-data/ (JSON files, auth)     │
 │                                                                             │
-│ FRONTEND PROCESS:                                                          │
-│  - React app in Electron BrowserWindow (frameless, custom title bar)       │
-│  - Builds via: npm run build → tsc -b + vite build → dist/                │
+│ AUTH (100% LOCAL, aucun serveur):                                           │
+│  - users.json dans AppData: {username, passwordHash(bcrypt), createdAt}    │
+│  - userIndex GunDB: annuaire public {exists: true, username, createdAt}    │
+│    → uniquement pour valider si un pseudo existe cross-machine              │
+│    → AUCUN mot de passe dans userIndex                                      │
+│  - Session: localStorage mesh_session_user                                 │
+│                                                                             │
+│ FICHIERS LOCAUX (AppData/Roaming/Mesh/mesh-data/):                         │
+│  - users.json        → comptes locaux                                      │
+│  - userServers.json  → {[username]: serverId[]}                            │
+│  - servers.json      → {[serverId]: Server}                                │
+│  - channels.json     → {[serverId]: Channel[]}                             │
+│  - members.json      → {[serverId]: Member[]}                              │
+│                                                                             │
+│ MESH.TS (src/mesh.ts):                                                      │
+│  - joinMeshRoom(roomId, myProfile?) → Trystero room                        │
+│  - onPeerJoin: sendProfile(myProfile, [peerId]) via makeAction('profile')  │
+│  - broadcastProfile(myProfile) → update toutes les rooms actives           │
+│  - peerProfiles: Record<string, any> → profils des pairs connectés         │
+│  - leaveAllMeshRooms() → appelé au logout                                  │
+│                                                                             │
+│ FRONTEND:                                                                   │
+│  - React app dans Electron BrowserWindow (frameless, custom title bar)     │
+│  - Builds via: npm run build → tsc -b + vite build → dist/                 │
 │  - Vite config uses manualChunks as FUNCTION (not object) for Rolldown     │
 │                                                                             │
-│ PACKAGE.JSON:                                                              │
+│ PACKAGE.JSON:                                                               │
 │  - "type": "module" (ESM everywhere)                                       │
-│  - BUT electron/main.js is CommonJS (require()) — intentional!             │
-│  - electron/main.js cannot use import/export yet                           │
+│  - BUT electron/main.js est CommonJS (require()) — intentionnel!           │
+│  - electron/main.js ne peut pas utiliser import/export                     │
 │                                                                             │
-│ ELECTRON BUILD:                                                            │
-│  - electron-builder → release/ (Windows ZIP, Mac DMG, Linux AppImage)      │
-│  - Windows output: Mesh-Windows-v1.0.zip (~435MB)                          │
-│  - CI/CD: GitHub Actions on tag v* → builds Win/Mac/Linux → GitHub Release│
-│  - CAVEAT: node_modules/app-builder-lib patches for cross-compile         │
-│    (Linux→Windows without Wine). Patches lost on npm install!              │
-│                                                                             │
-│ PORT HARDCODING:                                                           │
-│  - Backend: 3001                                                           │
-│  - Change both server/index.js AND all fetch() calls if needed             │
-│                                                                             │
-│ CENTRAL CONFIG (src/config.ts):                                            │
-│  - SERVER_URL and UPLOAD_URL come from this file only (GUN_PEERS removed) │
-│  - Priority: localStorage("mesh_server_url") > VITE_SERVER_URL env > 3001 │
-│  - SERVER_URL is only needed for file uploads (optional local relay)       │
-│  - import { SERVER_URL, UPLOAD_URL } from './config'                       │
-│    (or '../config' for components/)                                        │
-│  - GUN_PEERS is now managed in src/gun.ts (singleton) — do not import     │
-│    GUN_PEERS from config.ts, it no longer exists there                     │
-│  - DO NOT hardcode 'http://localhost:3001' anywhere else in the codebase   │
+│ IPC HANDLERS (electron/main.js):                                            │
+│  - read-local-file / write-local-file / delete-local-file                  │
+│  - get-desktop-sources (desktopCapturer)                                   │
+│  - show-notification / window-minimize / window-maximize / window-close    │
+│  - get-app-version / install-update                                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -59,571 +69,283 @@
 │                                                                             │
 │ src/                                                                        │
 │  ├─ App.tsx                         Root component. Manages global state   │
-│  ├─ App.css                         All CSS (6600+ lines, see CSS note)    │
-│  ├─ context/AppContext.tsx          React global context (username, etc)  │
-│  ├─ types/index.ts                  All TypeScript interfaces             │
+│  ├─ App.css                         All CSS (6600+ lines, voir CSS note)   │
+│  ├─ context/AppContext.tsx          React global context (username, etc)   │
+│  ├─ types/index.ts                  All TypeScript interfaces              │
+│  ├─ localStore.ts                   IPC bridge → AppData JSON files        │
+│  ├─ gun.ts                          Singleton GunDB (radisk local only)    │
+│  ├─ mesh.ts                         Trystero rooms + profil broadcast      │
+│  ├─ config.ts                       SERVER_URL, UPLOAD_URL (legacy)        │
 │  │                                                                         │
-│  ├─ components/                                                            │
-│  │  ├─ TitleBar.tsx                 Frameless title bar + IPC controls    │
-│  │  ├─ ServerBar.tsx                Left column: server icons             │
-│  │  ├─ ChannelSidebar.tsx           Channel list + drag&drop + perms      │
-│  │  ├─ ChatArea.tsx                 Main chat zone (messages, input, etc) │
-│  │  ├─ StreamArea.tsx               Voice/video/screen share WebRTC       │
-│  │  ├─ VoicePip.tsx                 Floating voice PiP (draggable)        │
-│  │  ├─ UpdateBanner.tsx             electron-updater banner               │
-│  │  ├─ DMSidebar.tsx / DMArea.tsx   Direct messages                       │
-│  │  ├─ FriendsPage.tsx              Add/remove/block friends              │
-│  │  ├─ MembersPanel.tsx             Right panel: server members           │
-│  │  ├─ UserPanel.tsx                Bottom-left: avatar + mute/deafen     │
-│  │  ├─ UserSettings.tsx             8 sections (account, privacy, etc)    │
-│  │  ├─ ServerSettings.tsx           8 sections + Bots + Emojis + modals   │
-│  │  ├─ ServerModal.tsx              Create/join server dialog             │
-│  │  ├─ ChannelSettingsModal.tsx     General / Permissions / Webhooks tabs │
-│  │  ├─ Auth.tsx                     Login/register GunDB SEA              │
-│  │  ├─ WelcomePage.tsx              Landing page                          │
-│  │  └─ BotEditor.tsx                Visual bot editor (28 node types)     │
+│  ├─ components/                                                             │
+│  │  ├─ TitleBar.tsx                 Frameless title bar + IPC controls     │
+│  │  ├─ ServerBar.tsx                Left column: server icons              │
+│  │  ├─ ChannelSidebar.tsx           Channel list + drag&drop + perms       │
+│  │  ├─ ChatArea.tsx                 Main chat zone                         │
+│  │  ├─ StreamArea.tsx               Voice/video/screen share WebRTC        │
+│  │  ├─ VoicePip.tsx                 Floating voice PiP (draggable)         │
+│  │  ├─ UpdateBanner.tsx             electron-updater banner                │
+│  │  ├─ DMSidebar.tsx / DMArea.tsx   Direct messages                        │
+│  │  ├─ FriendsPage.tsx              Add/remove/block friends               │
+│  │  ├─ MembersPanel.tsx             Right panel: server members            │
+│  │  ├─ UserPanel.tsx                Bottom-left: avatar + mute/deafen      │
+│  │  ├─ UserSettings.tsx             8 sections (account, privacy, etc)     │
+│  │  ├─ ServerSettings.tsx           8 sections + Bots + Emojis + modals    │
+│  │  ├─ ServerModal.tsx              Create/join server dialog              │
+│  │  ├─ ChannelSettingsModal.tsx     General / Permissions / Webhooks tabs  │
+│  │  ├─ Auth.tsx                     Login/register local + GunDB userIndex │
+│  │  ├─ GifPicker.tsx                Stickers emoji (TODO: Tenor API)       │
+│  │  ├─ WelcomePage.tsx              Landing page                           │
+│  │  └─ BotEditor.tsx                Visual bot editor (28 node types)      │
 │  │                                                                         │
-│  ├─ hooks/                                                                 │
-│  │  ├─ gun.ts                       Singleton GunDB instance (P2P peers)  │
-│  │  ├─ useSocket.ts                 GunDB messages, reactions, typing P2P │
-│  │  ├─ useStream.ts                 WebRTC P2P via GunDB signaling + STUN │
-│  │  ├─ useServers.ts                Server CRUD (GunDB)                   │
-│  │  ├─ useChannels.ts               Channel CRUD (GunDB)                  │
-│  │  ├─ useMembers.ts                Member management (GunDB)             │
-│  │  ├─ useRoles.ts                  Custom roles CRUD (GunDB)             │
-│  │  ├─ useDMs.ts                    Private messages (GunDB)              │
-│  │  ├─ useProfile.ts                User profile (GunDB)                  │
-│  │  ├─ useChannelPermissions.ts     Overrides: setOverride/removeOverride │
-│  │  ├─ useAllChannelPerms.ts        Load all overrides + canAccessChannel │
-│  │  ├─ useWebhooks.ts               Incoming webhooks (REST)              │
-│  │  ├─ useNotifications.ts          Desktop notifications                 │
-│  │  ├─ useBotEngine.ts              Client-side bot runtime (optional)    │
-│  │  └─ (custom hooks for specific features)                              │
+│  ├─ hooks/                                                                  │
+│  │  ├─ useAppUI.ts                  État UI centralisé                     │
+│  │  └─ ...                                                                 │
 │  │                                                                         │
-│  ├─ server/                                                                │
-│  │  ├─ index.js                     Main server + Express + Socket.io     │
-│  │  └─ botEngine.js                 Bot runtime (traverse graph, exec)    │
-│  │                                                                         │
-│  └─ electron/                                                              │
-│     ├─ main.js                      BrowserWindow + tray + IPC + updater  │
-│     └─ preload.js                   contextBridge → window.electron       │
+│  ├─ useSocket.ts                    GunDB messages, réactions, typing P2P  │
+│  ├─ useStream.ts                    WebRTC P2P via GunDB signaling + STUN  │
+│  ├─ useServers.ts                   Server CRUD (local + GunDB)            │
+│  ├─ useChannels.ts                  Channel CRUD (local + GunDB)           │
+│  ├─ useMembers.ts                   Member management (local + GunDB)      │
+│  ├─ useRoles.ts                     Custom roles CRUD (GunDB)              │
+│  ├─ useDMs.ts                       Private messages (GunDB)               │
+│  ├─ useProfile.ts                   User profile (GunDB)                   │
+│  ├─ useBotEngine.ts                 Client-side bot runtime                │
+│  ├─ useAuth.ts                      Auth locale (users.json + userIndex)   │
+│  └─ ...                                                                    │
 │                                                                             │
-│ .github/workflows/                                                          │
-│  └─ release.yml                     CI/CD: build on tag v*, GitHub Release │
+│ electron/                                                                   │
+│  ├─ main.js         BrowserWindow + tray + IPC + updater + local files     │
+│  └─ preload.js      contextBridge → window.electron                        │
 │                                                                             │
-│ Root:                                                                       │
-│  ├─ package.json                    ESM mode, scripts: build, dev, electron│
-│  ├─ tsconfig.json                   TypeScript config                     │
-│  ├─ vite.config.ts                  Vite 8 config (manualChunks function) │
-│  ├─ package.json "build" section    Electron packaging config             │
-│  └─ dist/ / release/                Build outputs                         │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─ KEY TYPES (types/index.ts) ────────────────────────────────────────────────┐
-│                                                                             │
-│ Server {                                                                    │
-│   id: string                                                               │
-│   name: string                                                             │
-│   icon?: string (base64 or URL)                                            │
-│   ownerId: string (username)                                               │
-│   inviteCode?: string                                                      │
-│   members: Record<string, Member>                                          │
-│ }                                                                           │
-│                                                                             │
-│ Channel {                                                                   │
-│   id: string                                                               │
-│   name: string                                                             │
-│   type: 'text' | 'voice'                                                   │
-│   categoryId?: string                                                      │
-│   topic?: string                                                           │
-│   userLimit?: number (0 = unlimited)                                       │
-│   order?: number                                                           │
-│ }                                                                           │
-│                                                                             │
-│ Member {                                                                    │
-│   username: string                                                         │
-│   role: 'owner' | 'admin' | 'moderator' | 'member' | 'banned'              │
-│   customRoleId?: string (links to CustomRole.id)                           │
-│   joinedAt: number (timestamp)                                             │
-│ }                                                                           │
-│                                                                             │
-│ CustomRole {                                                                │
-│   id: string                                                               │
-│   name: string                                                             │
-│   color: string (hex)                                                      │
-│   permissions: RolePermissions                                             │
-│ }                                                                           │
-│                                                                             │
-│ RolePermissions {                                                           │
-│   canSendMessages: boolean                                                 │
-│   canDeleteMessages: boolean                                               │
-│   canManageChannels: boolean                                               │
-│   canManageRoles: boolean                                                  │
-│   canKick: boolean                                                         │
-│   canBan: boolean                                                          │
-│   canInvite: boolean                                                       │
-│   canPinMessages: boolean                                                  │
-│ }                                                                           │
-│                                                                             │
-│ Message {                                                                   │
-│   id: string                                                               │
-│   content: string                                                          │
-│   author: string (username)                                                │
-│   timestamp: number                                                        │
-│   channelId: string                                                        │
-│   serverId: string                                                         │
-│   replyTo?: string (message ID)                                            │
-│   reactions?: Record<string, string[]> ({emoji: [usernames]})             │
-│   isPinned?: boolean                                                       │
-│   attachments?: string[] (URLs)                                            │
-│   editedAt?: number                                                        │
-│ }                                                                           │
-│                                                                             │
-│ ChannelPermOverride {                                                       │
-│   targetId: string (role ID or username)                                   │
-│   targetType: 'role' | 'user'                                              │
-│   allow?: { canRead?, canWrite?, canManage? }                              │
-│   deny?: { canRead?, canWrite?, canManage? }                               │
-│ }                                                                           │
-│                                                                             │
-│ Webhook {                                                                   │
-│   name: string                                                             │
-│   token: string (unique)                                                   │
-│   url: string                                                              │
-│ }                                                                           │
+│ .github/workflows/release.yml   CI/CD: build on tag v*, GitHub Release    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ GUNDB PATHS (Critical reference) ──────────────────────────────────────────┐
+┌─ GUNDB PATHS (référence critique) ──────────────────────────────────────────┐
 │                                                                             │
-│ Messages:                                                                   │
-│   messages.{serverId}.{channelId}.{msgId}                                  │
-│                                                                             │
-│ Servers:                                                                    │
-│   servers.{serverId} (entire Server object)                                │
-│                                                                             │
-│ Members:                                                                    │
-│   servers.{serverId}.members.{username}                                    │
-│                                                                             │
-│ Channel Permissions:                                                        │
-│   channel_perms.{serverId}.{channelId}.{overrideId}                        │
-│                                                                             │
-│ Webhooks:                                                                   │
-│   webhooks.{token} (stores name, url, serverId, channelId)                 │
-│                                                                             │
-│ AutoMod Config:                                                             │
-│   automod.{serverId} ({blockedWords[], warnMode, deleteMode, bothMode})   │
-│                                                                             │
-│ Bots:                                                                       │
-│   bots.{serverId}.{botId} (graph nodes, triggers, actions)                 │
-│                                                                             │
-│ Invites (Global Index):                                                     │
-│   invites.{code} ({serverId, maxUses, usedCount, expiresAt})               │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─ BEHAVIORAL QUIRKS & TRAPS ─────────────────────────────────────────────────┐
-│                                                                             │
-│ 1. VOICE PERSISTENCE                                                       │
-│    - activeVoiceChannel is a SEPARATE state from currentChannel            │
-│    - Navigating between text channels does NOT leave voice                 │
-│    - Only explicit leaveVoice() (hang up button) disconnects               │
-│    - Design: user can alt-tab between conversations while on call          │
-│                                                                             │
-│ 2. SPLIT-VIEW (Double text channels)                                       │
-│    - Two independent useSocket hooks: one for currentChannel, one for      │
-│      rightChannel (right sidebar parallel chat)                            │
-│    - If rightChannel is null, second useSocket gets '' channelId → inert   │
-│    - Be careful not to duplicate message subscriptions                     │
-│                                                                             │
-│ 3. AUTOMOD ENFORCEMENT                                                     │
-│    - Purely client-side (useSocket hook)                                   │
-│    - Blocked messages NEVER hit GunDB                                      │
-│    - Warnings injected into local state only, auto-clear after 5s          │
-│    - No server-side validation (yet)                                       │
-│                                                                             │
-│ 4. resolveChannelPerms QUIRK                                               │
-│    - Function signature includes _customRoles parameter (unused)           │
-│    - Named with underscore because it's not used in the function body      │
-│    - Actual resolution uses member.customRoleId to match overrides         │
-│    - Priority: owner > banned > user override > role override > DEFAULT    │
-│                                                                             │
-│ 5. NOTIFICATIONS API                                                       │
-│    - preload.js exposes: window.electron.showNotification(title, body)     │
-│    - TWO SEPARATE ARGUMENTS, not an object {title, body}                   │
-│    - Electron API + fallback to Web Notifications API                      │
-│    - Always guard: if ((window as any).electron) before calling            │
-│                                                                             │
-│ 6. electron-updater TRY/CATCH                                              │
-│    - In main.js, wrapped in try/catch (package in devDependencies)         │
-│    - Guard: if (!isDev && app.isPackaged) before auto-update logic         │
-│    - Prevents crashes if updater not packaged                              │
-│                                                                             │
-│ 7. ELECTRON-BUILDER PATCHES                                                │
-│    - node_modules/app-builder-lib/out/ has manual patches for cross-build  │
-│    - Patches enable Linux→Windows without Wine or real NSIS                │
-│    - CRITICAL: npm install will DESTROY these patches!                     │
-│    - If reinstalling, backup patches first                                 │
-│                                                                             │
-│ 8. BOT LIVE RELOAD                                                         │
-│    - BotEditor emits: socket.emit('bot_saved', {serverId, botId})          │
-│    - server/botEngine.js listens and reloads bot without restart           │
-│    - Saves time during bot development                                     │
-│                                                                             │
-│ 9. VITE CONFIG (vite.config.ts)                                            │
-│    - manualChunks MUST be a FUNCTION: (id) => {...}, NOT an object         │
-│    - Vite 8 uses Rolldown (different from Vite 5)                          │
-│    - Object syntax will cause build failures                               │
-│                                                                             │
-│ 10. MAIN.JS IS COMMONJS                                                    │
-│     - Despite "type": "module" in package.json                             │
-│     - Electron main process doesn't support ESM yet                        │
-│     - Uses require() for all imports                                       │
-│     - This is intentional and necessary                                    │
-│                                                                             │
-│ 11. CSS CENTRALIZATION                                                     │
-│     - ALL CSS in src/App.css (6600+ lines)                                 │
-│     - Root variables: --nb-* (Nebula design), --text-primary, etc.         │
-│     - Never create separate .css files without updating App.css            │
-│     - Design token list maintained in App.css comments                     │
-│                                                                             │
-│ 12. CHANNEL VISIBILITY                                                     │
-│     - ChannelSidebar filters by canAccessChannel()                         │
-│     - Active channel can become invisible if perms change                  │
-│     - Don't crash; gracefully fallback to first visible channel            │
-│                                                                             │
-│ 13. DRAG & DROP CHANNEL MIME TYPE                                          │
-│     - dataTransfer.setData('mesh/channel-id', channel.id)                   │
-│     - Custom MIME to avoid conflicts with browser drag                     │
-│                                                                             │
-│ 14. SPLIT-VIEW CLOSE BUTTON                                                │
-│     - Appears on hover over .split-divider                                 │
-│     - Class: .split-close-btn                                              │
-│                                                                             │
-│ 15. TRAY BEHAVIOR                                                          │
-│     - App minimizes to tray instead of quitting (unless isQuitting = true) │
-│     - Allows background presence                                           │
-│                                                                             │
-│ 16. DM NOTIFICATIONS                                                       │
-│     - useNotifications(messages, currentUsername, otherUser, isDM=true)    │
-│     - Last parameter triggers DM-specific behavior                         │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─ DESIGN SYSTEM ─────────────────────────────────────────────────────────────┐
-│                                                                             │
-│ Theme: "Neon Architect" + "Organic Brutalism"                              │
-│ Typography: Manrope (headings) + Inter (body)                              │
-│ Color Palette: Nebula Dark (violet cosmium, cool tones)                    │
-│ Components: Glassmorphism, no hard 1px borders                             │
-│ Shadows: Ambient 40px blur for depth                                       │
-│ Accessibility: WCAG AA compliant                                           │
-│                                                                             │
-│ CSS Organization (App.css):                                                │
-│  - Root variables (--nb-*, --text-*, --danger, --accent)                   │
-│  - Scoped components (TitleBar, ServerBar, ChannelSidebar, etc.)           │
-│  - Utilities (flex layouts, spacing)                                       │
-│  - Media queries for responsive (though desktop-only)                      │
-│                                                                             │
-│ DO NOT:                                                                     │
-│  - Create separate CSS files                                               │
-│  - Use inline styles (except dynamic values)                               │
-│  - Use Tailwind or CSS-in-JS libraries                                     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─ SECURITY & INFRASTRUCTURE ─────────────────────────────────────────────────┐
-│                                                                             │
-│ SERVER-SIDE (server/index.js):                                             │
-│  - Helmet.js (security headers)                                            │
-│  - express-rate-limit (API throttling)                                     │
-│  - xss-clean (XSS sanitization)                                            │
-│  - CORS whitelist: localhost:3000 (dev), localhost:5173 (prod)             │
-│                                                                             │
-│ AUTH:                                                                       │
-│  - GunDB SEA (Elliptic Curve Cryptography)                                 │
-│  - No passwords stored in plaintext                                        │
-│  - Register/login creates or authenticates GunDB user                      │
-│                                                                             │
-│ WEBHOOKS:                                                                   │
-│  - Token-based (unique token per webhook)                                  │
-│  - Rate-limited per token                                                  │
-│  - POST to external URL with message payload                               │
-│  - Error logging but no retry logic (yet)                                  │
-│                                                                             │
-│ DEEP LINKS:                                                                 │
-│  - mesh:// protocol handled by electron/main.js                            │
-│  - Allows join-server, join-channel from external links                    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─ WORKFLOW: BUILD & RELEASE ──────────────────────────────────────────────────┐
-│                                                                             │
-│ DEVELOPMENT:                                                                │
-│  $ npm install                                                              │
-│  $ npm run dev                                                              │
-│    - Starts Vite dev server on :5173                                       │
-│    - Starts Electron in dev mode                                           │
-│    - Server spawned via fork() from Electron main                          │
-│                                                                             │
-│ PRODUCTION BUILD:                                                           │
-│  $ npm run build                                                            │
-│    - tsc -b (TypeScript compilation)                                       │
-│    - vite build (frontend bundle → dist/)                                  │
-│    - Output: dist/index.html + chunk-*.js                                  │
-│                                                                             │
-│ ELECTRON BUILD:                                                             │
-│  $ npm run electron                                                         │
-│    - npm run build + electron-builder                                      │
-│    - Outputs: release/Mesh-Windows-v1.0.zip, etc.                          │
-│                                                                             │
-│ RELEASE PROCESS:                                                            │
-│  1. Update version in package.json (e.g., 1.0.5)                           │
-│  2. Tag git: git tag v1.0.5                                                │
-│  3. Push: git push origin v1.0.5                                           │
-│  4. GitHub Actions (release.yml) triggers:                                 │
-│     - Builds Windows/Mac/Linux                                             │
-│     - Creates GitHub Release with artifacts                                │
-│     - Publishes to release/ (auto-updater reads from here)                 │
-│                                                                             │
-│ ELECTRON AUTO-UPDATE:                                                      │
-│  - On startup, checks GitHub Releases for newer version                    │
-│  - Downloads diff patches if available                                     │
-│  - Shows UpdateBanner component to notify user                             │
-│  - Restart required to apply                                               │
+│ Messages:    messages.{serverId}_{channelId}.{msgId}                       │
+│ Réactions:   reactions.{serverId}_{channelId}.{msgId}.{emoji}.{user}       │
+│ Typing:      (via Trystero P2P — pas GunDB)                                │
+│ Profils:     profiles.{username}                                           │
+│ Serveurs:    servers.{serverId}                                             │
+│ Membres:     members.{serverId}.{username}                                 │
+│ Channels:    channels.{serverId} (array JSON)                              │
+│ AutoMod:     automod.{serverId}                                            │
+│ Bots:        bots.{serverId}.{botId} ({id, name, active, json})            │
+│ Bot events:  bot_events.{serverId}                                         │
+│ Invites:     invites.{code}                                                │
+│ UserIndex:   userIndex.{username_lowercase} ({exists, username, createdAt})│
+│ Voice:       voice_presence.{channelId}.{username}                         │
+│ Stream:      stream_presence.{username}                                    │
+│ Webhooks:    webhooks.{token}                                              │
+│ Channel perms: channel_perms.{serverId}.{channelId}.{overrideId}          │
+│ Kicked:      kicked.{serverId}.{username}                                  │
+│ ServerIndex: serverIndex.{serverId} (tags, name — TODO)                   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ FEATURE CHECKLIST ────────────────────────────────────────────────────────┐
 │                                                                             │
-│ COMPLETED:                                                                  │
-│ ✓ GunDB auth (register/login/profile)                                      │
-│ ✓ Servers & channels (text/voice) + categories + drag&drop                 │
-│ ✓ Messages (markdown, GIFs, search, pins, replies, reactions)              │
-│ ✓ WebRTC (screen share, camera, source selector)                           │
-│ ✓ Voice (P2P audio, mute, deafen, voice persistence)                       │
-│ ✓ DMs & friends system (add/block)                                         │
-│ ✓ User & server settings (8 sections each)                                 │
-│ ✓ Custom roles + kick/ban                                                  │
-│ ✓ AutoMod (client-side enforcement)                                        │
-│ ✓ Invites (code + expiry + maxUses)                                        │
-│ ✓ Bot editor (visual, 28 node types)                                       │
-│ ✓ Bot engine (server runtime)                                              │
-│ ✓ Security (Helmet, rate limiting, XSS, CORS)                              │
-│ ✓ Electron (frameless, tray, menu, deep links)                             │
-│ ✓ Windows distributable (ZIP + installer batch)                            │
-│ ✓ Nebula Dark design                                                       │
-│ ✓ Neon Architect design V2                                                 │
-│ ✓ Infinite scroll (50 msgs + pagination)                                   │
-│ ✓ Server emojis                                                            │
-│ ✓ Split-view (two text channels)                                           │
-│ ✓ VoicePip (draggable floating voice)                                      │
-│ ✓ Permissions (advanced per-channel overrides)                             │
-│ ✓ Webhooks (incoming REST)                                                 │
-│ ✓ Auto-update (electron-updater + GitHub Releases)                         │
-│ ✓ Code splitting (chunk sizes optimized)                                   │
-│ ✓ CI/CD (GitHub Actions Win/Mac/Linux)                                     │
+│ ── v1.0 → v1.2.4 (bases complètes) ───────────────────────────────────── │
+│ ✓ Auth locale (users.json AppData) + GunDB userIndex annuaire public       │
+│ ✓ Serveurs, channels, membres (local JSON + GunDB sync temps réel)         │
+│ ✓ Messages P2P (Trystero WebRTC + GunDB radisk)                            │
+│ ✓ Réactions, typing, édition, suppression messages                         │
+│ ✓ DMs & amis (add/block/remove/pending)                                    │
+│ ✓ WebRTC voice/vidéo/screen share                                          │
+│ ✓ VoicePip flottant draggable                                              │
+│ ✓ Split-view (deux salons texte simultanés)                                │
+│ ✓ Profils (avatar photo, bannière, décorations, effets animés)             │
+│ ✓ MemberTooltip vignettes temps réel                                       │
+│ ✓ Rôles personnalisés + permissions par salon                              │
+│ ✓ Bot editor visuel (ReactFlow, 28 types de nœuds)                        │
+│ ✓ AutoMod client-side (useSocket)                                          │
+│ ✓ Invitations (code + expiry + maxUses)                                    │
+│ ✓ Emojis personnalisés serveur                                             │
+│ ✓ Notifications (desktop + son)                                            │
+│ ✓ Auto-update (electron-updater + GitHub Releases)                        │
+│ ✓ Animations transitions (slide, fade, pop)                                │
+│ ✓ Présence vocale dans ChannelSidebar                                      │
+│ ✓ Recherche membres MembersPanel                                           │
+│ ✓ BotEditor overlay full-screen (outside app-content)                      │
+│ ✓ Validation pseudo ami via userIndex GunDB                                │
 │                                                                             │
-│ ── Phase 2 — Profil & UX (2026-04) ──────────────────────────────────────  │
-│ ✓ Photo de profil (avatar + bannière, crop interactif)                     │
-│ ✓ Décorations d'avatar (8 types : gold, rainbow, neon, fire, ice…)         │
-│ ✓ Effets de profil animés (7 types : particles, aurora, matrix…)           │
-│ ✓ ImageCropper canvas (zone de crop visible, règle des tiers, zoom)        │
-│ ✓ Vignettes membres (MemberTooltip) en temps réel via updatedAt listener   │
-│ ✓ Photo profil dans panel membres (MembersPanel) avec GunDB sync           │
-│ ✓ UserPanel fixé bottom-left (position: fixed, hors sidebars)              │
-│ ✓ Layout app: TitleBar dans .app + .app-content row (corrige trou noir)    │
-│ ✓ Bannière utilisateur stable dans UserSettings                             │
-│ ✓ Vignettes non coupées (z-index 10001 + clamp viewport)                  │
+│ ── v1.3.0 — LIVRÉ 2026-04-28 ──────────────────────────────────────────── │
 │                                                                             │
-│ TODO (Phase 3 — Prochaines priorités):                                      │
+│ ✓ Bugs bloquants                                                            │
+│    - Membres invisibles → Trystero presence_{serverId}, re-broadcast 30s   │
+│    - Champ "Ajouter un ami" → user-select + focus auto via useRef          │
+│    - AutoMod → tags individuels (chips ×) dans ServerSettings              │
 │                                                                             │
-│ ── Phase 3 completee ──────────────────────────────────────────────────── │
-│ ✓ Nebula Dark v3 : palette emeraude complete, zero blurple Discord         │
-│ ✓ Logo SVG Mesh (TitleBar, ServerBar, Auth)                                │
-│ ✓ mesh.ts : trystero v0.23 corrige (relayUrls, relayRedundancy)            │
-│ ✓ gun.ts : relays GunDB publics (zero serveur P2P fallback)                │
-│ ✓ leaveAllMeshRooms() appele au logout                                     │
-│ ✓ Build TypeScript propre (0 erreurs)                                      │
+│ ✓ Transfert fichiers P2P (WebTorrent)                                      │
+│    - IPC: torrent-seed-buffer, torrent-download, torrent-progress,         │
+│      torrent-stop, torrent-stop-all dans electron/main.js                  │
+│    - src/torrentBridge.ts: seedBrowserFile(), downloadTorrent()            │
+│    - Carte fichier P2P dans le chat (badge, nom, taille, bouton DL)        │
+│    - Expiration 24h, seeding dans main process (persist nav)               │
 │                                                                             │
-│ 🎨 DESIGN                                                                  │
-│  ✓ Animations de transition entre vues (slide, fade) — DONE               │
-│    · key={activeServerId} sur channel-bar-wrapper → slide-in au chgt srv   │
-│    · key={channel.id} sur ChatArea → fade-in au chgt de salon              │
-│    · mesh-pop sur member-tooltip, reaction-picker                          │
-│    · mesh-fade-in sur modal-overlay, settings-overlay                     │
-│    · mesh-slide-up sur voice-pip, fp-context-menu, msg-group:last-child   │
-│  ✓ Membres vocaux dans ChannelSidebar — DONE                              │
-│    · useVoicePresence hook lit gun.get('voice_presence') pour tous salons  │
-│    · Affiche avatars + noms sous chaque salon vocal avec membres dedans    │
-│    · Icônes mute/deafen par membre, compteur X/limit sur le salon          │
-│    · Salon actif mis en surbrillance verte (cs-voice-active)               │
-│  ✓ Recherche membres dans MembersPanel — DONE                             │
-│    · Barre de recherche filtre online+offline dans tous les groupes        │
-│    · Bouton clear, focus ring animé                                        │
+│ ✓ StreamPip remote + PIP toggle                                            │
+│    - StreamPip câblé en mode remote (flux ami en vignette draggable)       │
+│    - Bouton PIP dans la barre de contrôles (à côté micro/cam)              │
+│    - Menu ⋯ pour "Arrêter de regarder" (évite surcharge UI)                │
 │                                                                             │
-│ 🔧 STABILITE & QUALITE                                                     │
-│  - Tests E2E basiques (Playwright + Electron)                               │
+│ ✓ GifPicker Tenor API v2                                                   │
+│    - Clé publique Google/Tenor intégrée (demo key)                         │
+│    - Catégories tabs (Tendance, LOL, Aww, etc.), recherche debounce 400ms  │
+│    - Grille masonry CSS, badge "Powered by Tenor"                          │
 │                                                                             │
-│ 🌐 P2P & CONNEXION                                                         │
-│  - Livekit fallback pour appels >4 utilisateurs                            │
-│  ✓ Optimisation GunDB: .on() redondants supprimés — DONE                  │
-│    · useSocket: doublon automod .once()/.on() → gardé uniquement .on()    │
-│    · useDMs: doublon dms .once()/.on() → gardé uniquement .on()           │
-│    · useServers: catchup setTimeout supprimé → .once() radisk immédiat    │
-│    · useUnread: cleanup listeners .off() au changement de serveur         │
+│ ✓ AutoMod ban temporaire P2P                                               │
+│    - Action 'tempban' dans useSocket + durée configurable (5m→24h)         │
+│    - gun.get('tempbans').get(serverId).get(username) → bannedUntil         │
+│    - Auto-lift via setTimeout dans useMembers (setIsKicked → false)        │
 │                                                                             │
-│ 🤖 BOTS & INTÉGRATIONS                                                     │
-│  - Bot connectors (Slack, GitHub, webhooks entrants)                       │
-│  - Nouveaux types de noeuds bot (conditions avancées, API calls)           │
+│ ✓ Bannière serveur + tags searchables (Phase 5)                            │
+│    - Bannière: canvas crop 1200×480, JPEG 0.82, base64 → GunDB            │
+│    - Tags: chips individuels (input + Enter/virgule), max 5, CSV GunDB     │
+│    - Affichage dans ChannelSidebar (60px, cover) + chargé dans App.tsx     │
 │                                                                             │
-│ 📦 DISTRIBUTION                                                             │
-│  - NSIS installer signé (cert ~200€/an — optionnel beta)                  │
-│  - Auto-update GitHub Releases (electron-updater déjà installé)           │
-│    ⚠️  ACTION REQUISE pour activer l'auto-update :                         │
-│    1. Remplacer "TON_GITHUB_USERNAME" dans package.json > build.publish    │
-│    2. Créer un repo GitHub public nommé "mesh"                             │
-│    3. git remote add origin https://github.com/TON_USER/mesh.git           │
-│    4. Pour publier : git tag v1.0.1 && git push origin v1.0.1             │
-│       → GitHub Actions build Windows/Mac/Linux et crée la Release          │
-│    5. GH_TOKEN = secrets.GITHUB_TOKEN (automatique, rien à configurer)    │
-│  - Site web Mesh (landing page)                                             │
+│ ✓ Bot engine complet (Phase 6)                                             │
+│    - 6 événements câblés: message, command (!/ prefix), member_join,       │
+│      member_leave, voice_join, reaction                                     │
+│    - Nouvelles actions: action_ban (→ updateRole banned), action_pin_msg   │
+│    - Variables listes: variable_list_add/remove/contains                   │
+│    - trigger_command: dispatch séparé pour msg commençant par ! ou /       │
 │                                                                             │
-│ 💎 MESH PRO (futur)                                                        │
-│  - Team management + SSO                                                   │
-│  - Audit logs serveur                                                      │
-│  - Tableaux de bord analytics                                              │
+│ ── À VENIR (backlog) ──────────────────────────────────────────────────── │
+│  □ GunDB serverIndex → recherche de serveurs publics par tags              │
+│  □ Bot DM (onSendBotDM câblé via useDMs)                                   │
+│  □ action_pin_message → GunDB pinned.{channelId}.{msgId}                  │
+│  □ Redesign graphique (après stabilisation fonctionnelle)                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ COMMON TASKS ──────────────────────────────────────────────────────────────┐
+┌─ BEHAVIORAL QUIRKS & TRAPS ─────────────────────────────────────────────────┐
 │                                                                             │
-│ ADD A NEW PERMISSION:                                                       │
-│  1. Add field to RolePermissions interface (types/index.ts)                 │
-│  2. Add to DEFAULT_PERMISSIONS in useChannelPermissions.ts                  │
-│  3. Add toggle in ServerSettings.tsx (Roles section)                        │
-│  4. Add check in useChannelPermissions.ts resolveChannelPerms()             │
-│  5. Enforce in relevant hook (useSocket, useServers, etc.)                  │
+│ 1. VOICE PERSISTENCE                                                        │
+│    - activeVoiceChannel séparé de currentChannel                           │
+│    - Navigation entre salons texte ne quitte PAS le vocal                  │
+│    - Seul leaveVoice() déconnecte                                           │
 │                                                                             │
-│ ADD A NEW AUTOMOD RULE:                                                     │
-│  1. Define rule logic in useSocket.ts (checkAutoMod function)               │
-│  2. Add UI toggle in ServerSettings.tsx (AutoMod section)                   │
-│  3. Store in GunDB path: automod.{serverId}                                │
-│  4. Test both delete & warn modes                                          │
+│ 2. SPLIT-VIEW                                                               │
+│    - Deux useSocket indépendants (currentChannel + rightChannel)           │
+│    - rightChannel null → 2e hook inerte                                    │
 │                                                                             │
-│ ADD A NEW BOT NODE TYPE:                                                    │
-│  1. Create node config in BotEditor.tsx (nodeTypes array)                   │
-│  2. Add case in server/botEngine.js traverseAndExecute()                    │
-│  3. Implement logic (check triggers, exec actions, set vars)                │
-│  4. Test via bot_saved Socket.io event live reload                         │
+│ 3. AUTOMOD                                                                  │
+│    - Purement client-side (useSocket)                                      │
+│    - Messages bloqués n'atteignent JAMAIS GunDB                            │
+│    - Warnings injectés en local, auto-effacés après 5s                    │
+│    - Config stockée: automod.{serverId} dans GunDB                         │
+│    - PROBLÈME ACTUEL: UI = textarea CSV → à remplacer par tags individuels │
 │                                                                             │
-│ FIX A PERMISSION BUG:                                                       │
-│  1. Check resolveChannelPerms logic in useChannelPermissions.ts             │
-│  2. Verify canAccessChannel usage in ChannelSidebar & ChatArea              │
-│  3. Test both role & user overrides                                        │
-│  4. Check allow/deny priority (deny always wins)                           │
+│ 4. resolveChannelPerms QUIRK                                                │
+│    - Paramètre _customRoles inutilisé (underscore intentionnel)            │
+│    - Priorité: owner > banned > user override > role override > DEFAULT    │
 │                                                                             │
-│ CHANGE BACKEND PORT:                                                        │
-│  1. server/index.js: const PORT = 3001 → your port                          │
-│  2. electron/main.js: SERVER_URL = 'http://localhost:3001' → your port     │
-│  3. src/config.ts fallback line → new port                                 │
-│  4. Restart everything                                                     │
+│ 5. NOTIFICATIONS API                                                        │
+│    - window.electron.showNotification(title, body) — 2 args séparés        │
+│    - Toujours garder: if ((window as any).electron)                        │
 │                                                                             │
-│ LET FRIENDS CONNECT REMOTELY (true P2P — zero ngrok, zero server):        │
-│  Architecture P2P pure : Trystero (BitTorrent) + GunDB + WebRTC + STUN   │
-│  1. Each user runs Mesh.exe (no terminal, no commands)                     │
-│  2. Mesh auto-connects via trackers BitTorrent publics (src/mesh.ts)       │
-│  3. GunDB synchronise toutes les données entre peers (messages, présence)  │
-│  4. Voice/video: WebRTC signaling via GunDB, then direct P2P stream        │
-│  5. Share invite codes as before — aucune config requise                   │
+│ 6. ELECTRON-BUILDER PATCHES                                                 │
+│    - node_modules/app-builder-lib/out/ patché manuellement                 │
+│    - npm install DÉTRUIT ces patches!                                      │
+│    - Sauvegarder avant npm install                                         │
 │                                                                             │
-│  Bootstrap P2P — Trackers BitTorrent publics (src/mesh.ts):               │
-│    - wss://tracker.openwebtorrent.com                                      │
-│    - wss://tracker.btorrent.xyz                                            │
-│    - wss://tracker.fastcast.nz                                             │
-│    - wss://tracker.webtorrent.dev                                          │
-│  Package: @trystero-p2p/torrent                                            │
-│  Namespace: 'mesh-discord-clone-v1' (évite collisions avec autres apps)   │
+│ 7. VITE CONFIG                                                              │
+│    - manualChunks DOIT être une FUNCTION, pas un objet                     │
+│    - Vite 8 utilise Rolldown                                               │
 │                                                                             │
-│  STUN servers (free, no auth):                                             │
-│    - stun.l.google.com:19302                                               │
-│    - stun1.l.google.com:19302                                              │
-│    - stun.mozilla.org                                                      │
+│ 8. MAIN.JS EST COMMONJS                                                     │
+│    - Malgré "type": "module" dans package.json                             │
+│    - Utilise require() — intentionnel et nécessaire                        │
 │                                                                             │
-│ DEPLOY A NEW VERSION:                                                       │
-│  1. npm run build                                                           │
-│  2. Update package.json version                                            │
-│  3. Commit & tag: git tag v1.2.3                                            │
-│  4. Push tag: git push origin v1.2.3                                        │
-│  5. GitHub Actions builds & releases automatically                         │
-│  6. Users get UpdateBanner on next launch                                  │
+│ 9. CSS CENTRALISÉ                                                           │
+│    - TOUT dans src/App.css (6600+ lignes)                                  │
+│    - Ne jamais créer de fichiers .css séparés                              │
+│                                                                             │
+│ 10. FILES TRUNCATION BUG (sandbox Linux)                                   │
+│     - Les outils Edit/Write dans le sandbox Linux peuvent tronquer les     │
+│       fichiers si le contexte de session est perdu                         │
+│     - Toujours vérifier wc -l après un Write important                    │
+│     - Si tronqué: git show HEAD:fichier > fichier pour restaurer           │
+│                                                                             │
+│ 11. GUNDB .once() vs radisk                                                 │
+│     - .once() retourne undefined si la donnée n'est pas en cache radisk   │
+│     - Toujours avoir un fallback ou utiliser .on() pour les données live   │
+│                                                                             │
+│ 12. GIT LOCK FILES                                                          │
+│     - .git/index.lock et .git/HEAD.lock bloquent les commits              │
+│     - Sur Windows: del .git\index.lock pour débloquer                      │
+│                                                                             │
+│ 13. GITHUB TOKEN                                                            │
+│     - Scopes requis: repo + workflow                                       │
+│     - set GH_TOKEN=xxx avant npm run electron:build:win -- --publish always│
+│     - Si tag déjà existant: git tag -d vX.Y.Z && git push origin :refs/   │
+│       tags/vX.Y.Z puis rebump version                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─ DESIGN SYSTEM ─────────────────────────────────────────────────────────────┐
+│                                                                             │
+│ Theme: "Neon Architect" + "Organic Brutalism" (Nebula Dark v3)             │
+│ Typography: Manrope (headings) + Inter (body)                              │
+│ Color Palette: Nebula Dark (violet cosmium, emeraude, cool tones)          │
+│ Components: Glassmorphism, pas de bordures 1px dures                       │
+│ Shadows: Ambient 40px blur pour profondeur                                 │
+│                                                                             │
+│ DO NOT:                                                                     │
+│  - Créer des fichiers CSS séparés                                          │
+│  - Utiliser du Tailwind ou CSS-in-JS                                       │
+│  - Styles inline sauf valeurs dynamiques                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─ WORKFLOW: BUILD & RELEASE ──────────────────────────────────────────────────┐
+│                                                                             │
+│ DÉVELOPPEMENT:                                                              │
+│  $ npm run dev                                                              │
+│                                                                             │
+│ BUILD:                                                                      │
+│  $ npm run build                 (tsc -b + vite build → dist/)             │
+│                                                                             │
+│ RELEASE:                                                                    │
+│  1. Bumper version dans package.json                                       │
+│  2. git add -A && git commit -m "..."                                      │
+│  3. set GH_TOKEN=xxx (Windows)                                             │
+│  4. npm run electron:build:win -- --publish always                         │
+│     Si tag déjà existant: supprimer le tag sur GitHub Releases d'abord    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ DEBUGGING TIPS ────────────────────────────────────────────────────────────┐
 │                                                                             │
-│ P2P / GUNDB DEBUGGING:                                                      │
-│  - Singleton instance: window._gun in Electron devtools console            │
-│  - View all data: window._gun._.graph                                      │
-│  - GunDB paths (case-sensitive):                                           │
-│      messages.{serverId}_{channelId}                                       │
-│      reactions.{serverId}_{channelId}                                      │
-│      typing.{serverId}_{channelId}.{username}                              │
-│      dm_typing.{pairId}.{username}                                         │
-│      webrtc_signal.{targetUsername}.{signalId}                             │
-│      voice_presence.{channelId}.{username}                                 │
-│      stream_presence.{username}                                            │
-│  - Use .once() for single reads, .on() for live subscriptions              │
-│  - Always call .off() in useEffect cleanup to avoid memory leaks           │
-│  - Peers connected: window._gun._.opt.peers                                │
+│ P2P / GUNDB:                                                                │
+│  - window._gun._.graph  → voir toutes les données                          │
+│  - window._gun._.opt.peers → pairs connectés                               │
+│  - Toujours .off() dans le cleanup useEffect                               │
+│                                                                             │
+│ TRYSTERO:                                                                   │
+│  - Vérifier les trackers BitTorrent accessibles (réseau, firewall)         │
+│  - Namespace 'mesh-discord-clone-v1' dans mesh.ts                          │
+│  - makeAction() retourne [send, receive] functions                         │
 │                                                                             │
 │ PERMISSIONS:                                                                │
-│  - Check member.role & member.customRoleId                                  │
-│  - Log resolveChannelPerms output to verify override application            │
-│  - Test both allow & deny rules                                            │
-│  - Banned users bypass all permissions (special case)                       │
+│  - Log resolveChannelPerms output pour vérifier l'application              │
+│  - Tester allow ET deny rules                                              │
 │                                                                             │
 │ WEBRTC:                                                                     │
-│  - Check console for getUserMedia errors (permissions, device not found)   │
-│  - Remote audio: verify remoteAudios state updates                          │
-│  - Screen share: check Electron captureScreen permission                    │
-│                                                                             │
-│ BOT ISSUES:                                                                 │
-│  - Enable "Bot Debug Logs" in ServerSettings                               │
-│  - Check server console: bot_saved & execute logs                          │
-│  - Verify graph node connections (edges)                                   │
-│  - Test with simple trigger first (on message)                             │
-│                                                                             │
-│ NOTIFICATIONS:                                                              │
-│  - Check if window.electron exists (dev mode has no Electron API)          │
-│  - Verify preload.js contextBridge is set up correctly                     │
-│  - Test fallback Web Notifications API                                     │
-│                                                                             │
-│ ELECTRON UPDATER:                                                           │
-│  - Check isDev && app.isPackaged guards                                     │
-│  - Verify GitHub token permissions (if needed)                             │
-│  - Check release.yml workflow for build/publish steps                      │
+│  - Vérifier getUserMedia errors (permissions, device not found)            │
+│  - STUN: stun.l.google.com:19302                                           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─ IMPORTANT NOTES ───────────────────────────────────────────────────────────┐
 │                                                                             │
-│ - DESKTOP ONLY: No mobile/web responsive code. Assume 1080p+ screens.      │
-│ - P2P = FREE: No server costs for users. Mesh Pro = SaaS (200-800€/year)  │
-│ - YOUR DATA = YOURS: Selling point is decentralization + privacy.          │
-│ - No hardcoded Discord assets. All custom designs (Nebula, Neon).          │
-│ - Server path must be relative to __dirname in Electron context.           │
-│ - Always use absolute file paths in agent threads (working dir resets).    │
-│ - Test build locally before tagging release.                               │
-│ - electron-builder patches are fragile. Document any changes.              │
-│ - Socket.io events should have namespace to avoid conflicts.               │
-│ - GunDB writes are async but optimistic (changes appear instantly).         │
-│ - DM keys use sorted usernames to avoid duplicates: [a, b].sort().join()   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-================================================================================
-                            END OF INSTRUCTIONS
-                     For next session: Start here and expand
-================================================================================
+│ - DESKTOP ONLY: Pas de responsive mobile/web. Assume 1080p+                │
+│ - P2P = GRATUIT: Zéro coût serveur pour les utilisateurs                  │
+│ - NE JAMAIS proposer ngrok/VPS/Railway comme solution finale               │
+│ - Toujours utiliser des chemins absolus dans les threads agent             │
+│ - GunDB writes = async mais optimiste (changements apparaissent aussitôt)  │
+│ - DM keys = sorted usernames: [a,b].sort().join('_')                       │
+│ - Test build localement avant de tagger une release                       │
+│ - NE PAS partager de tokens GitHub dans le chat (sécurité)      

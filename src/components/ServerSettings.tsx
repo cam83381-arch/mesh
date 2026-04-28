@@ -36,8 +36,9 @@ interface LogEntry {
 
 interface AutoMod {
   words: string       // virgule-séparé
-  action: 'delete' | 'warn' | 'both'
+  action: 'delete' | 'warn' | 'both' | 'tempban'
   enabled: boolean
+  banDuration: number // minutes (pour tempban)
 }
 
 // ── Constantes ──
@@ -124,14 +125,18 @@ function ServerSettings({
   const [tab, setTab] = useState('profile')
 
   // ── Profil serveur ──
-  const [serverName, setServerName]       = useState(server.name)
-  const [description, setDescription]     = useState('')
-  const [bannerColor, setBannerColor]     = useState('#5865f2')
-  const [iconUrl, setIconUrl]             = useState('')
-  const [tags, setTags]                   = useState('')
-  const [profileSaved, setProfileSaved]   = useState(false)
-  const [uploadingIcon, setUploadingIcon] = useState(false)
-  const iconInputRef = useRef<HTMLInputElement>(null)
+  const [serverName, setServerName]         = useState(server.name)
+  const [description, setDescription]       = useState('')
+  const [bannerColor, setBannerColor]       = useState('#5865f2')
+  const [bannerUrl, setBannerUrl]           = useState('')
+  const [iconUrl, setIconUrl]               = useState('')
+  const [tags, setTags]                     = useState('')
+  const [tagInput, setTagInput]             = useState('')
+  const [profileSaved, setProfileSaved]     = useState(false)
+  const [uploadingIcon, setUploadingIcon]   = useState(false)
+  const [uploadingBanner, setUploadingBanner] = useState(false)
+  const iconInputRef   = useRef<HTMLInputElement>(null)
+  const bannerInputRef = useRef<HTMLInputElement>(null)
 
   // ── Invitations ──
   const [invites, setInvites]             = useState<Record<string, Invite>>({})
@@ -151,8 +156,9 @@ function ServerSettings({
   const [logs, setLogs]                   = useState<LogEntry[]>([])
 
   // ── AutoMod ──
-  const [automod, setAutomod]             = useState<AutoMod>({ words: '', action: 'delete', enabled: false })
+  const [automod, setAutomod]             = useState<AutoMod>({ words: '', action: 'delete', enabled: false, banDuration: 10 })
   const [automodSaved, setAutomodSaved]   = useState(false)
+  const [automodTagInput, setAutomodTagInput] = useState('')
 
   // ── Modale de confirmation ──
   const [confirmModal, setConfirmModal]   = useState<{
@@ -179,6 +185,7 @@ function ServerSettings({
       if (!data) return
       if (data.description) setDescription(data.description)
       if (data.bannerColor) setBannerColor(data.bannerColor)
+      if (data.bannerUrl)   setBannerUrl(data.bannerUrl)
       if (data.iconUrl)     setIconUrl(data.iconUrl)
       if (data.tags)        setTags(data.tags)
     })
@@ -199,7 +206,7 @@ function ServerSettings({
     })
     // AutoMod
     g.get('automod').get(server.id).once((data: any) => {
-      if (data) setAutomod({ words: data.words || '', action: data.action || 'delete', enabled: !!data.enabled })
+      if (data) setAutomod({ words: data.words || '', action: data.action || 'delete', enabled: !!data.enabled, banDuration: data.banDuration || 10 })
     })
     return () => {
       g.get('invites').get(server.id).map().off()
@@ -218,7 +225,7 @@ function ServerSettings({
   const handleSaveProfile = () => {
     if (!serverName.trim()) return
     onUpdateServer(server.id, serverName)
-    g.get('servers').get(server.id).put({ description, bannerColor, iconUrl, tags })
+    g.get('servers').get(server.id).put({ description, bannerColor, bannerUrl, iconUrl, tags })
     addLog(server.id, `Profil serveur modifié`, username)
     setProfileSaved(true)
     setTimeout(() => setProfileSaved(false), 2000)
@@ -247,6 +254,33 @@ function ServerSettings({
       setIconUrl(dataUrl)
     } catch { alert("Impossible de traiter l'icone.") }
     finally { setUploadingIcon(false) }
+  }
+
+  // ── Upload bannière (base64, redimensionné 1200x480) ──
+  const handleBannerUpload = async (file: File) => {
+    setUploadingBanner(true)
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const img = new Image()
+        const url = URL.createObjectURL(file)
+        img.onload = () => {
+          const W = 1200, H = 480
+          const canvas = document.createElement('canvas')
+          canvas.width = W; canvas.height = H
+          const ctx = canvas.getContext('2d')!
+          // Cover crop
+          const ratio = Math.max(W / img.width, H / img.height)
+          const w = img.width * ratio, h = img.height * ratio
+          ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h)
+          URL.revokeObjectURL(url)
+          resolve(canvas.toDataURL('image/jpeg', 0.82))
+        }
+        img.onerror = reject
+        img.src = url
+      })
+      setBannerUrl(dataUrl)
+    } catch { alert("Impossible de traiter la bannière.") }
+    finally { setUploadingBanner(false) }
   }
 
   // ── Créer une invitation ──
@@ -359,7 +393,23 @@ function ServerSettings({
 
             {/* Aperçu bannière + icône */}
             <div className="ss-server-preview">
-              <div className="ss-server-banner" style={{ background: bannerColor }} />
+              {/* Bannière cliquable */}
+              <div
+                className="ss-server-banner"
+                style={{
+                  background: bannerUrl ? `url(${bannerUrl}) center/cover no-repeat` : bannerColor,
+                  cursor: isOwner ? 'pointer' : 'default',
+                }}
+                onClick={() => isOwner && bannerInputRef.current?.click()}
+                title={isOwner ? 'Cliquer pour changer la bannière' : undefined}
+              >
+                {isOwner && (
+                  <div className="ss-banner-edit-hint">
+                    {uploadingBanner ? '⏳ Upload…' : '🖼️ Modifier la bannière'}
+                  </div>
+                )}
+              </div>
+
               <div className="ss-server-icon-wrapper">
                 {iconUrl
                   ? <img src={iconUrl} alt="icon" className="ss-server-icon-img" />
@@ -374,21 +424,36 @@ function ServerSettings({
               <div className="ss-server-name-preview">{serverName || server.name}</div>
             </div>
 
+            {/* Inputs fichiers cachés */}
             <input ref={iconInputRef} type="file" accept="image/*" style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleIconUpload(f); e.target.value = '' }} />
+            <input ref={bannerInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleBannerUpload(f); e.target.value = '' }} />
 
             {isOwner && (
               <>
-                <div className="us-section">
-                  <div className="us-section-label">Couleur de bannière</div>
-                  <div className="us-color-grid">
-                    {BANNER_COLORS.map(c => (
-                      <button key={c} className={`us-color-swatch ${bannerColor === c ? 'selected' : ''}`}
-                        style={{ background: c, border: c === '#2b2d31' || c === '#111214' ? '1px solid #4e5058' : undefined }}
-                        onClick={() => setBannerColor(c)} />
-                    ))}
+                {/* Couleur de bannière (si pas d'image) */}
+                {!bannerUrl && (
+                  <div className="us-section">
+                    <div className="us-section-label">Couleur de bannière</div>
+                    <div className="us-color-grid">
+                      {BANNER_COLORS.map(c => (
+                        <button key={c} className={`us-color-swatch ${bannerColor === c ? 'selected' : ''}`}
+                          style={{ background: c, border: c === '#2b2d31' || c === '#111214' ? '1px solid #4e5058' : undefined }}
+                          onClick={() => setBannerColor(c)} />
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Bouton retirer l'image de bannière */}
+                {bannerUrl && (
+                  <div className="us-section">
+                    <button className="us-btn secondary" style={{ fontSize: 12 }} onClick={() => setBannerUrl('')}>
+                      🗑️ Retirer l'image de bannière
+                    </button>
+                  </div>
+                )}
 
                 <div className="us-section">
                   <div className="us-section-label">Nom du serveur</div>
@@ -402,11 +467,47 @@ function ServerSettings({
                   <div className="us-hint">{description.length}/500</div>
                 </div>
 
+                {/* Tags en chips */}
                 <div className="us-section">
-                  <div className="us-section-label">Tags <span style={{ color: '#949ba4', fontWeight: 400, textTransform: 'none' }}>(max 5, séparés par des virgules)</span></div>
-                  <input className="us-input" value={tags}
-                    onChange={e => setTags(e.target.value)} placeholder="gaming, musique, art…" />
-                  <div className="us-hint">{tags.split(',').filter(Boolean).length}/5 tags</div>
+                  <div className="us-section-label">
+                    Tags
+                    <span className="us-section-label-sub"> — max 5, pour être trouvé par les autres</span>
+                  </div>
+                  <div className="ss-tags-chips">
+                    {tags.split(',').map(t => t.trim()).filter(Boolean).map(tag => (
+                      <span key={tag} className="ss-tag-chip">
+                        #{tag}
+                        <button className="ss-tag-chip-remove" onClick={() => {
+                          const updated = tags.split(',').map(t => t.trim()).filter(t => t && t !== tag).join(', ')
+                          setTags(updated)
+                        }}>✕</button>
+                      </span>
+                    ))}
+                    {tags.split(',').filter(t => t.trim()).length < 5 && (
+                      <div className="ss-tags-add-row">
+                        <input
+                          className="ss-tags-input"
+                          placeholder="Ajouter un tag…"
+                          value={tagInput}
+                          onChange={e => setTagInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' || e.key === ',') {
+                              e.preventDefault()
+                              const word = tagInput.trim().replace(/,/g, '').toLowerCase()
+                              if (!word) return
+                              const existing = tags.split(',').map(t => t.trim()).filter(Boolean)
+                              if (!existing.includes(word) && existing.length < 5) {
+                                setTags([...existing, word].join(', '))
+                              }
+                              setTagInput('')
+                            }
+                          }}
+                          maxLength={20}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="us-hint">{tags.split(',').filter(t => t.trim()).length}/5 tags</div>
                 </div>
 
                 <button className={`us-btn primary ${profileSaved ? 'saved' : ''}`} onClick={handleSaveProfile}>
@@ -778,15 +879,67 @@ function ServerSettings({
             </div>
 
             <div className="us-section" style={{ marginTop: '20px' }}>
-              <div className="us-section-label">Mots interdits <span style={{ color: '#949ba4', fontWeight: 400, textTransform: 'none' }}>(séparés par des virgules)</span></div>
-              <textarea
-                className="us-textarea"
-                value={automod.words}
-                onChange={e => setAutomod(p => ({ ...p, words: e.target.value }))}
-                placeholder="spam, insulte, mot1, mot2…"
-                rows={4}
-                disabled={!isOwner}
-              />
+              <div className="us-section-label">Mots interdits</div>
+
+              {/* Tags existants */}
+              <div className="us-automod-tags">
+                {automod.words.split(',').map(w => w.trim()).filter(Boolean).map(word => (
+                  <span key={word} className="us-automod-tag">
+                    {word}
+                    {isOwner && (
+                      <button
+                        className="us-automod-tag-remove"
+                        onClick={() => {
+                          const updated = automod.words.split(',').map(w => w.trim()).filter(w => w && w !== word).join(', ')
+                          setAutomod(p => ({ ...p, words: updated }))
+                        }}
+                        title="Supprimer"
+                      >✕</button>
+                    )}
+                  </span>
+                ))}
+                {automod.words.split(',').filter(w => w.trim()).length === 0 && (
+                  <span className="us-automod-empty">Aucun mot interdit</span>
+                )}
+              </div>
+
+              {/* Input pour ajouter un mot */}
+              {isOwner && (
+                <div className="us-automod-add-row">
+                  <input
+                    className="us-automod-input"
+                    placeholder="Ajouter un mot…"
+                    value={automodTagInput}
+                    onChange={e => setAutomodTagInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault()
+                        const word = automodTagInput.trim().replace(/,/g, '')
+                        if (!word) return
+                        const existing = automod.words.split(',').map(w => w.trim()).filter(Boolean)
+                        if (!existing.includes(word)) {
+                          setAutomod(p => ({ ...p, words: [...existing, word].join(', ') }))
+                        }
+                        setAutomodTagInput('')
+                      }
+                      if (e.key === 'Escape') setAutomodTagInput('')
+                    }}
+                  />
+                  <button
+                    className="us-automod-add-btn"
+                    onClick={() => {
+                      const word = automodTagInput.trim().replace(/,/g, '')
+                      if (!word) return
+                      const existing = automod.words.split(',').map(w => w.trim()).filter(Boolean)
+                      if (!existing.includes(word)) {
+                        setAutomod(p => ({ ...p, words: [...existing, word].join(', ') }))
+                      }
+                      setAutomodTagInput('')
+                    }}
+                    disabled={!automodTagInput.trim()}
+                  >Ajouter</button>
+                </div>
+              )}
               <div className="us-hint">
                 {automod.words.split(',').filter(w => w.trim()).length} mot{automod.words.split(',').filter(w => w.trim()).length !== 1 ? 's' : ''} interdit{automod.words.split(',').filter(w => w.trim()).length !== 1 ? 's' : ''}
               </div>
@@ -796,9 +949,10 @@ function ServerSettings({
               <div className="us-section-label">Action automatique</div>
               <div className="us-radio-group">
                 {[
-                  { value: 'delete', label: '🗑️ Supprimer le message', desc: 'Le message est supprimé silencieusement.' },
-                  { value: 'warn',   label: '⚠️ Avertir l\'auteur',    desc: 'Un avertissement est envoyé à l\'auteur.' },
-                  { value: 'both',   label: '🛡️ Supprimer + Avertir', desc: 'Le message est supprimé et l\'auteur est averti.' },
+                  { value: 'delete',  label: '🗑️ Supprimer le message',   desc: 'Le message est supprimé silencieusement.' },
+                  { value: 'warn',    label: '⚠️ Avertir l\'auteur',       desc: 'Un avertissement est envoyé à l\'auteur.' },
+                  { value: 'both',    label: '🛡️ Supprimer + Avertir',    desc: 'Le message est supprimé et l\'auteur est averti.' },
+                  { value: 'tempban', label: '⏱️ Ban temporaire',          desc: 'L\'auteur est banni automatiquement pour une durée définie.' },
                 ].map(opt => (
                   <label key={opt.value} className={`us-radio-item ${automod.action === opt.value ? 'selected' : ''}`}>
                     <input type="radio" name="automodAction" value={opt.value}
@@ -812,6 +966,25 @@ function ServerSettings({
                   </label>
                 ))}
               </div>
+
+              {/* Durée du ban temporaire */}
+              {automod.action === 'tempban' && (
+                <div className="us-automod-duration-row">
+                  <span className="us-automod-duration-label">Durée du ban :</span>
+                  <div className="us-automod-duration-options">
+                    {[5, 10, 30, 60, 180, 1440].map(min => (
+                      <button
+                        key={min}
+                        className={`us-automod-dur-btn${automod.banDuration === min ? ' active' : ''}`}
+                        onClick={() => isOwner && setAutomod(p => ({ ...p, banDuration: min }))}
+                        disabled={!isOwner}
+                      >
+                        {min < 60 ? `${min}min` : min === 1440 ? '24h' : `${min / 60}h`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {isOwner && (

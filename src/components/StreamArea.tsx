@@ -78,6 +78,7 @@ interface Props {
   onStopStream: () => void
   onWatchStream: (id: string) => void
   onStopWatching: () => void
+  onTogglePip?: (active: boolean) => void
   isCameraOn: boolean
   cameraVideoRef: React.RefObject<HTMLVideoElement | null>
   onToggleCamera: () => void
@@ -311,9 +312,22 @@ function StreamQualityModal({
   )
 }
 
+// Icône PIP
+const IconPip = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="4" width="20" height="16" rx="2"/>
+    <rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"/>
+  </svg>
+)
+const IconDots = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
+  </svg>
+)
+
 function StreamArea({
   isStreaming, streamers, watchingStream,
-  videoRef, onStartStream, onStopStream, onWatchStream, onStopWatching,
+  videoRef, onStartStream, onStopStream, onWatchStream, onStopWatching, onTogglePip,
   isCameraOn, cameraVideoRef, onToggleCamera,
   voiceUsers, voiceFull, onLeaveVoice,
   isMuted = false, isDeafened = false, onToggleMute, onToggleDeafen
@@ -322,6 +336,7 @@ function StreamArea({
   const [showSourcePicker, setShowSourcePicker] = useState(false)
   const [showQualityModal, setShowQualityModal] = useState(false)
   const [pendingSourceId, setPendingSourceId] = useState<string | undefined>(undefined)
+  const [showDotsMenu, setShowDotsMenu] = useState(false)
 
   const isElectron = !!(window as any).electron?.getDesktopSources
 
@@ -369,9 +384,6 @@ function StreamArea({
               ? '🔴 Live — Tu partages ton écran'
               : `👁️ Stream de ${streamers.find(s => s.id === watchingStream)?.username || '...'}`}
           </div>
-          {watchingStream && (
-            <button className="voice-stop-watch-btn" onClick={onStopWatching} title="Arrêter de regarder">✕</button>
-          )}
         </div>
       )}
 
@@ -477,6 +489,40 @@ function StreamArea({
             >
               <IconScreen />
             </button>
+          )}
+
+          {/* PIP — visible uniquement quand on regarde un stream */}
+          {watchingStream && onTogglePip && (
+            <button
+              className="voice-ctrl-btn voice-ctrl-pip"
+              onClick={() => onTogglePip(true)}
+              title="Mini-lecteur (PIP)"
+            >
+              <IconPip />
+            </button>
+          )}
+
+          {/* ⋯ Options — visible quand on regarde */}
+          {watchingStream && (
+            <div className="voice-dots-wrapper">
+              <button
+                className="voice-ctrl-btn"
+                onClick={() => setShowDotsMenu(v => !v)}
+                title="Plus d'options"
+              >
+                <IconDots />
+              </button>
+              {showDotsMenu && (
+                <div className="voice-dots-menu" onMouseLeave={() => setShowDotsMenu(false)}>
+                  <button
+                    className="voice-dots-item voice-dots-item--danger"
+                    onClick={() => { setShowDotsMenu(false); onStopWatching() }}
+                  >
+                    ⏹ Arrêter de regarder
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
