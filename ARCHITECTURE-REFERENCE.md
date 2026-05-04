@@ -120,7 +120,7 @@ if (automodData?.[serverId]) automodRef.current = automodData[serverId]
 
 ### 🟡 BUG MODÉRÉ — GIFs : clé Tenor demo rate-limitée
 **Fichier :** `src/components/GifPicker.tsx`  
-**Problème :** La clé `AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY` est une clé demo publique Google. Elle est partagée par des milliers de projets open-source et peut être rate-limitée ou révoquée sans préavis → GIFs qui ne chargent plus.  
+**Problème :** La clé `[REDACTED]` est une clé demo publique Google. Elle est partagée par des milliers de projets open-source et peut être rate-limitée ou révoquée sans préavis → GIFs qui ne chargent plus.  
 **Correction :** Obtenir une vraie clé gratuite sur https://developers.google.com/tenor/guides/quickstart et la stocker dans `.env` :
 ```
 VITE_TENOR_KEY=ta_vraie_cle_ici

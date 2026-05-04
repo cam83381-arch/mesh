@@ -1,6 +1,32 @@
-release/ 
-node_modules/ 
-dist/ 
+# Dépendances
+node_modules/
+server/node_modules/
 
+# Build
+dist/
+release/
+
+# Variables d'environnement — NE JAMAIS COMMITER
 .env
+.env.local
+.env.*.local
 server/.env
+
+# Données locales utilisateur — privées, jamais sur git
+mesh-data/
+*.mesh-data/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Electron builder cache
+electron-builder-cache/
