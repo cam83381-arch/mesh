@@ -7,7 +7,7 @@ import { AVATAR_DECORATIONS, PROFILE_EFFECTS } from './MemberTooltip'
 import { resizeImage } from '../utils/imageResize'
 import ImageCropper from './ImageCropper'
 
-import gun from '../gun'
+import { readLocal, writeLocal } from '../localStore'
 
 const sea = (Gun as any).SEA
 
@@ -111,7 +111,6 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
       const file = new File([blob], 'avatar.jpg', { type: blob.type })
       const resized = await resizeImage(file, 256, 256, 0.85)
       setLocalAvatarImage(resized)
-      gun.get('profiles').get(username).get('avatarImage').put(resized)
       if (onSaveProfile) onSaveProfile({ avatarImage: resized })
     } catch (err) {
       console.error('Erreur crop avatar:', err)
@@ -123,7 +122,6 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
   // ── Supprimer photo avatar ──
   const handleAvatarRemove = () => {
     setLocalAvatarImage(undefined)
-    gun.get('profiles').get(username).get('avatarImage').put(null)
     if (onSaveProfile) onSaveProfile({ avatarImage: null as any })
   }
 
@@ -149,7 +147,6 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
       const file = new File([blob], 'banner.jpg', { type: blob.type })
       const resized = await resizeImage(file, 600, 200, 0.82)
       setLocalBannerImage(resized)
-      gun.get('profiles').get(username).get('bannerImage').put(resized)
       if (onSaveProfile) onSaveProfile({ bannerImage: resized })
     } catch (err) {
       console.error('Erreur crop bannière:', err)
@@ -161,36 +158,21 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
   // ── Supprimer photo bannière ──
   const handleBannerRemove = () => {
     setLocalBannerImage(undefined)
-    gun.get('profiles').get(username).get('bannerImage').put(null)
     if (onSaveProfile) onSaveProfile({ bannerImage: null as any })
   }
 
   // ── Sauvegarde compte ──
   const handleSaveAccount = () => {
-    if (onSaveProfile) {
-      // Utiliser la fonction centralisée de useProfile (écrit GunDB + met à jour l'état React directement)
-      onSaveProfile({
-        avatarColor: localAvatarColor,
-        bannerColor: localBannerColor,
-        displayName: localDisplayName,
-        bio: localBio,
-        avatarDecoration: localDecoration === 'none' ? undefined : localDecoration,
-        profileEffect: localEffect === 'none' ? undefined : localEffect,
-        avatarImage: localAvatarImage,
-        bannerImage: localBannerImage,
-      })
-    } else {
-      // Fallback: écriture directe GunDB
-      const profileRef = gun.get('profiles').get(username)
-      profileRef.get('username').put(username)
-      profileRef.get('avatarColor').put(localAvatarColor)
-      profileRef.get('bannerColor').put(localBannerColor)
-      profileRef.get('displayName').put(localDisplayName)
-      profileRef.get('bio').put(localBio)
-      profileRef.get('avatarDecoration').put(localDecoration === 'none' ? null : localDecoration)
-      profileRef.get('profileEffect').put(localEffect === 'none' ? null : localEffect)
-      profileRef.get('updatedAt').put(Date.now())
-    }
+    onSaveProfile?.({
+      avatarColor: localAvatarColor,
+      bannerColor: localBannerColor,
+      displayName: localDisplayName,
+      bio: localBio,
+      avatarDecoration: localDecoration === 'none' ? undefined : localDecoration,
+      profileEffect: localEffect === 'none' ? undefined : localEffect,
+      avatarImage: localAvatarImage,
+      bannerImage: localBannerImage,
+    })
     onUpdateSettings({
       displayName: localDisplayName,
       bio: localBio,
@@ -207,18 +189,16 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
     if (newPwd.length < 6) { setPwdMsg({ text: 'Mot de passe trop court (min 6 caractères).', ok: false }); return }
     if (newPwd !== confirmPwd) { setPwdMsg({ text: 'Les mots de passe ne correspondent pas.', ok: false }); return }
 
-    return new Promise<void>(resolve => {
-      gun.get('users').get(username).once(async (user: any) => {
-        if (!user) { setPwdMsg({ text: 'Utilisateur introuvable.', ok: false }); resolve(); return }
-        const oldHash = await sea.work(oldPwd, username)
-        if (oldHash !== user.password) { setPwdMsg({ text: 'Ancien mot de passe incorrect.', ok: false }); resolve(); return }
-        const newHash = await sea.work(newPwd, username)
-        gun.get('users').get(username).get('password').put(newHash)
-        setPwdMsg({ text: 'Mot de passe modifié avec succès !', ok: true })
-        setOldPwd(''); setNewPwd(''); setConfirmPwd('')
-        resolve()
-      })
-    })
+    const users = await readLocal<Record<string, any>>('users.json') || {}
+    const user = users[username]
+    if (!user) { setPwdMsg({ text: 'Utilisateur introuvable.', ok: false }); return }
+    const oldHash = await sea.work(oldPwd, username)
+    if (oldHash !== user.password) { setPwdMsg({ text: 'Ancien mot de passe incorrect.', ok: false }); return }
+    const newHash = await sea.work(newPwd, username)
+    users[username] = { ...user, password: newHash }
+    await writeLocal('users.json', users)
+    setPwdMsg({ text: 'Mot de passe modifié avec succès !', ok: true })
+    setOldPwd(''); setNewPwd(''); setConfirmPwd('')
   }
 
   // ── Test micro ──

@@ -1,38 +1,43 @@
 /**
- * useDMTyping.ts — Indicateur de frappe pour les DMs, via GunDB (P2P)
+ * useDMTyping.ts — Indicateur de frappe pour les DMs, via Trystero P2P
  *
- * gun.get('dm_typing').get(pairId).get(username) → { active, ts }
+ * joinMeshRoom('dm_typing_{pairId}') → action 'typing' → { user, active }
  */
 
 import { useEffect, useState, useRef } from 'react'
-import gun from './gun'
+import { joinMeshRoom } from './mesh'
 
 function useDMTyping(pairId: string | null, username: string) {
   const [typingUser, setTypingUser] = useState<string | null>(null)
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sendTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sendTypingP2P = useRef<((t: object) => void) | null>(null)
 
   useEffect(() => {
     if (!pairId) return
+    let active = true
 
-    const node = gun.get('dm_typing').get(pairId)
+    const room = joinMeshRoom(`dm_typing_${pairId}`)
+    if (room) {
+      const [sendTypingFn, getTyping] = (room.makeAction as any)('typing') as [any, any]
+      sendTypingP2P.current = (t: object) => { try { sendTypingFn(t) } catch {} }
 
-    const handler = (data: any, user: string) => {
-      if (!user || user === username) return
-      const isActive = data && data.active === true && (Date.now() - (data.ts || 0)) < 5000
-      if (isActive) {
-        setTypingUser(user)
-        if (stopTimer.current) clearTimeout(stopTimer.current)
-        stopTimer.current = setTimeout(() => setTypingUser(null), 4000)
-      } else {
-        setTypingUser(prev => (prev === user ? null : prev))
-      }
+      getTyping((data: any) => {
+        if (!active || !data?.user || data.user === username) return
+        const isActive = data.active === true
+        if (isActive) {
+          setTypingUser(data.user)
+          if (stopTimer.current) clearTimeout(stopTimer.current)
+          stopTimer.current = setTimeout(() => setTypingUser(null), 4000)
+        } else {
+          setTypingUser(prev => (prev === data.user ? null : prev))
+        }
+      })
     }
 
-    node.map().on(handler)
-
     return () => {
-      node.map().off()
+      active = false
+      sendTypingP2P.current = null
       if (stopTimer.current) clearTimeout(stopTimer.current)
       if (sendTimer.current) clearTimeout(sendTimer.current)
       setTypingUser(null)
@@ -41,10 +46,10 @@ function useDMTyping(pairId: string | null, username: string) {
 
   const sendTyping = () => {
     if (!pairId || !username) return
-    gun.get('dm_typing').get(pairId).get(username).put({ active: true, ts: Date.now() })
+    sendTypingP2P.current?.({ user: username, active: true })
     if (sendTimer.current) clearTimeout(sendTimer.current)
     sendTimer.current = setTimeout(() => {
-      gun.get('dm_typing').get(pairId).get(username).put({ active: false, ts: Date.now() })
+      sendTypingP2P.current?.({ user: username, active: false })
     }, 2500)
   }
 

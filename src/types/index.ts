@@ -93,6 +93,9 @@ export interface Message {
   // P2P via WebTorrent
   magnetUri?: string
   torrentExpiry?: number    // timestamp expiration seeding
+  // DMs P2P (Trystero)
+  convId?: string
+  participants?: string[]
 }
 
 export type Role = 'owner' | 'admin' | 'moderator' | 'member' | 'banned'

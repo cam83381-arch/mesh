@@ -1,61 +1,92 @@
 import { useState, useEffect, useRef } from 'react'
-import gun from './gun'
+import { readLocal, writeLocal } from './localStore'
+import { joinMeshRoom } from './mesh'
+
+const FILE = 'emojis.json'
 
 export interface ServerEmoji {
   id: string
-  name: string       // ex: "pepe"
-  url: string        // base64 data URL ou URL serveur
+  name: string
+  url: string        // base64 data URL
   serverId: string
   addedBy: string
   createdAt: number
 }
 
+async function loadEmojis(serverId: string): Promise<Record<string, ServerEmoji>> {
+  const data = await readLocal<Record<string, Record<string, ServerEmoji>>>(FILE) || {}
+  return data[serverId] || {}
+}
+
+async function saveEmojis(serverId: string, emojis: Record<string, ServerEmoji>) {
+  const data = await readLocal<Record<string, Record<string, ServerEmoji>>>(FILE) || {}
+  data[serverId] = emojis
+  await writeLocal(FILE, data)
+}
+
+function sortEmojis(emojis: Record<string, ServerEmoji>): ServerEmoji[] {
+  return Object.values(emojis).filter(e => e?.name).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+}
+
 function useServerEmojis(serverId: string, username: string) {
   const [emojis, setEmojis] = useState<ServerEmoji[]>([])
   const emojisRef = useRef<Record<string, ServerEmoji>>({})
+  const sendEmojiFn = useRef<((data: any) => void) | null>(null)
 
   useEffect(() => {
-    if (!serverId) {
-      setEmojis([])
-      return
-    }
-
+    if (!serverId) { setEmojis([]); return }
+    let active = true
     emojisRef.current = {}
     setEmojis([])
 
-    const ref = gun.get('emojis').get(serverId)
-    ref.map().on((emoji: ServerEmoji, id: string) => {
-      if (!emoji || !emoji.name) {
-        delete emojisRef.current[id]
-      } else {
-        emojisRef.current[id] = { ...emoji, id }
-      }
-      setEmojis(Object.values(emojisRef.current)
-        .filter(e => e && e.name)
-        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)))
+    loadEmojis(serverId).then(data => {
+      if (!active) return
+      emojisRef.current = data
+      setEmojis(sortEmojis(data))
     })
 
-    return () => {
-      ref.map().off()
+    // Trystero room pour sync cross-machine
+    const room = joinMeshRoom(`emojis_${serverId}`)
+    if (room) {
+      const [sendEmoji, getEmoji] = (room.makeAction as any)('emoji_update') as [any, any]
+      sendEmojiFn.current = sendEmoji
+
+      // Recevoir un emoji ajouté / supprimé
+      getEmoji(async (payload: any) => {
+        if (!active || !payload?.id) return
+        const data = await loadEmojis(serverId)
+        if (payload._deleted) {
+          delete data[payload.id]
+        } else {
+          const { _deleted: _, ...emoji } = payload
+          data[emoji.id] = emoji as ServerEmoji
+        }
+        emojisRef.current = data
+        await saveEmojis(serverId, data)
+        setEmojis(sortEmojis(data))
+      })
+
+      // Envoyer tous nos emojis au nouveau pair
+      room.onPeerJoin(async () => {
+        const data = await loadEmojis(serverId)
+        Object.values(data).forEach(e => {
+          try { sendEmoji(e) } catch {}
+        })
+      })
     }
+
+    return () => { active = false }
   }, [serverId])
 
   const addEmoji = async (name: string, file: File): Promise<boolean> => {
     if (!serverId || !name.trim() || !file) return false
-
-    // Valider le nom (lettres, chiffres, underscores, tirets — max 32 chars)
     const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
     if (!cleanName || cleanName.length > 32) return false
-
-    // Vérifier les doublons
     const exists = Object.values(emojisRef.current).some(e => e.name === cleanName)
     if (exists) return false
-
-    // Valider type + taille (max 256KB, images seulement)
     if (!file.type.startsWith('image/')) return false
     if (file.size > 256 * 1024) return false
 
-    // Convertir en base64 data URL
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(reader.result as string)
@@ -64,22 +95,23 @@ function useServerEmojis(serverId: string, username: string) {
     })
 
     const id = Date.now().toString()
-    const emoji: ServerEmoji = {
-      id,
-      name: cleanName,
-      url: dataUrl,
-      serverId,
-      addedBy: username,
-      createdAt: Date.now()
-    }
-
-    gun.get('emojis').get(serverId).get(id).put(emoji)
+    const emoji: ServerEmoji = { id, name: cleanName, url: dataUrl, serverId, addedBy: username, createdAt: Date.now() }
+    emojisRef.current[id] = emoji
+    await saveEmojis(serverId, emojisRef.current)
+    setEmojis(sortEmojis(emojisRef.current))
+    try { sendEmojiFn.current?.(emoji) } catch {}
     return true
   }
 
-  const removeEmoji = (emojiId: string) => {
+  const removeEmoji = async (emojiId: string) => {
     if (!serverId) return
-    gun.get('emojis').get(serverId).get(emojiId).put(null)
+    const deleted = emojisRef.current[emojiId]
+    delete emojisRef.current[emojiId]
+    await saveEmojis(serverId, emojisRef.current)
+    setEmojis(sortEmojis(emojisRef.current))
+    if (deleted) {
+      try { sendEmojiFn.current?.({ ...deleted, _deleted: true }) } catch {}
+    }
   }
 
   return { emojis, addEmoji, removeEmoji }

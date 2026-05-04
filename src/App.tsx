@@ -22,7 +22,6 @@ import BotEditor from './components/BotEditor'
 import VoicePip from './components/VoicePip'
 import UpdateBanner from './components/UpdateBanner'
 
-import gun from './gun'
 import { useApp } from './context/AppContext'
 import { useAppUI } from './hooks/useAppUI'
 import useServers from './useServers'
@@ -146,11 +145,11 @@ function App() {
     if (prevBannerServerId.current === activeServerId) return
     prevBannerServerId.current = activeServerId
     setServerBannerUrl(''); setServerBannerColor('')
-    gun.get('servers').get(activeServerId).once((data: any) => {
-      if (!data) return
-      setServerBannerUrl(data.bannerUrl || '')
-      setServerBannerColor(data.bannerColor || '')
-    })
+    const activeServer = servers.find(s => s.id === activeServerId)
+    if (activeServer) {
+      setServerBannerUrl((activeServer as any).bannerUrl || '')
+      setServerBannerColor((activeServer as any).bannerColor || '')
+    }
   }, [activeServerId])
 
   // ── Effets ──
@@ -707,5 +706,4 @@ function App() {
     </div>
   )
 }
-
 export default App

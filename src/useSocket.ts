@@ -1,14 +1,15 @@
 /**
- * useSocket.ts — Transport P2P pur via Trystero (WebRTC + trackers BitTorrent)
+ * useSocket.ts - Transport P2P pur via Trystero (WebRTC + trackers BitTorrent)
  *
  * Architecture :
- *   - Trystero  → transport temps réel entre pairs (messages, réactions, typing)
- *   - GunDB     → cache local radisk (historique, persistance offline)
- *   - Zéro serveur central entre utilisateurs
+ *   - Trystero  -> transport temps reel entre pairs (messages, reactions, typing)
+ *   - GunDB     -> cache local radisk (historique, persistance offline)
+ *   - Zero serveur central entre utilisateurs
  */
 
 import { useEffect, useState, useRef } from 'react'
 import gun from './gun'
+import { readLocal } from './localStore'
 import { joinMeshRoom } from './mesh'
 import type { Message } from './types'
 
@@ -46,7 +47,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
 
     const roomKey = `${serverId}_${channelId}`
 
-    // ── Trystero P2P ──
+    // -- Trystero P2P --
     const room = joinMeshRoom(roomKey, myProfile)
 
     if (room) {
@@ -59,7 +60,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
       sendP2PReaction.current = (r: object) => { try { sendReaction(r) } catch {} }
       sendP2PTyping.current = (t: object) => { try { sendTypingFn(t) } catch {} }
 
-      // Réception messages P2P
+      // Reception messages P2P
       getMsg((msg: any) => {
         if (!active || !msg || !msg.content || !msg.id) return
         msgsRef.current[msg.id] = { ...msg }
@@ -67,7 +68,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
         gun.get('messages').get(roomKey).get(msg.id).put(msg)
       })
 
-      // Réception réactions P2P
+      // Reception reactions P2P
       getReaction((r: any) => {
         if (!active || !r?.msgId || !r?.emoji || !r?.user) return
         if (!reactionsRef.current[r.msgId]) reactionsRef.current[r.msgId] = {}
@@ -82,7 +83,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
         gun.get('reactions').get(roomKey).get(r.msgId).get(r.emoji).get(r.user).put(r.remove ? null : true)
       })
 
-      // Réception typing P2P
+      // Reception typing P2P
       getTyping((t: any) => {
         if (!active || !t?.user || t.user === username) return
         setTypingUsers(prev => {
@@ -94,20 +95,20 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
       })
     }
 
-    // ── AutoMod ──
-    gun.get('automod').get(serverId).on((data: AutoModConfig) => {
+    // -- AutoMod - charge depuis localStore (source de verite) --
+    readLocal<Record<string, AutoModConfig>>('automod.json').then(data => {
       if (!active) return
-      if (data) automodRef.current = data
+      if (data?.[serverId]) automodRef.current = data[serverId]
     })
 
-    // ── Historique depuis radisk ──
+    // -- Historique depuis radisk --
     gun.get('messages').get(roomKey).map().once((msg: Message, id: string) => {
       if (!active || !msg || !msg.content) return
       msgsRef.current[id] = { ...msg, id }
       setMessages(sortMsgs(msgsRef.current))
     })
 
-    // ── Réactions depuis radisk ──
+    // -- Reactions depuis radisk --
     gun.get('reactions').get(roomKey).map().on((_: any, msgId: string) => {
       if (!active || !msgId || msgId === '_') return
       gun.get('reactions').get(roomKey).get(msgId).map().on((_e: any, emoji: string) => {
@@ -128,7 +129,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
       })
     })
 
-    // Nettoyage typing expiré
+    // Nettoyage typing expire
     const typingCleanup = setInterval(() => {
       if (!active) return
       setTypingUsers([])
@@ -141,12 +142,11 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
       sendP2PTyping.current = null
       clearInterval(typingCleanup)
       try { gun.get('messages').get(roomKey).map().off() } catch {}
-      try { gun.get('automod').get(serverId).off() } catch {}
       try { gun.get('reactions').get(roomKey).map().off() } catch {}
     }
   }, [channelId, serverId])
 
-  // ── AutoMod ──
+  // -- AutoMod --
   const checkAutoMod = (content: string): boolean => {
     const cfg = automodRef.current
     if (!cfg || !cfg.enabled || !cfg.words.trim()) return false
@@ -157,7 +157,7 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
     const showWarn = (text: string, color = '#f0b232') => {
       const warnId = 'warn_' + Date.now()
       const warn: Message = {
-        id: warnId, author: '🛡️ AutoMod',
+        id: warnId, author: 'AutoMod',
         content: text, color,
         time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
         timestamp: Date.now(),
@@ -173,17 +173,17 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
     if (cfg.action === 'tempban') {
       const durationMin = cfg.banDuration || 10
       const bannedUntil = Date.now() + durationMin * 60 * 1000
-      // Écrire le ban temporaire dans GunDB — useMembers le détecte
+      // Ecrire le ban temporaire dans GunDB -- useMembers le detecte
       gun.get('tempbans').get(serverId).get(username).put({ bannedUntil, reason: 'AutoMod' })
       showWarn(
-        `🚫 Tu as été banni temporairement pendant ${durationMin < 60 ? `${durationMin} min` : `${durationMin / 60}h`} pour avoir utilisé un mot interdit.`,
+        `Tu as ete banni temporairement pendant ${durationMin < 60 ? `${durationMin} min` : `${durationMin / 60}h`} pour avoir utilise un mot interdit.`,
         '#ed4245'
       )
       return true
     }
 
     if (cfg.action === 'warn' || cfg.action === 'both') {
-      showWarn('⚠️ Ton message contient un mot interdit et a été bloqué.')
+      showWarn('Ton message contient un mot interdit et a ete bloque.')
     }
     return cfg.action === 'delete' || cfg.action === 'both'
   }
@@ -216,11 +216,11 @@ function useSocket(channelId: string, username: string, serverId: string, myProf
   const editMessage = (msgId: string, newContent: string) => {
     if (!serverId) return
     const roomKey = `${serverId}_${channelId}`
-    const updated = { ...(msgsRef.current[msgId] || {}), content: newContent + ' ✏️' } as Message
+    const updated = { ...(msgsRef.current[msgId] || {}), content: newContent + ' (edit)' } as Message
     msgsRef.current[msgId] = updated
     setMessages(sortMsgs(msgsRef.current))
     sendP2PMsg.current?.(updated)
-    gun.get('messages').get(roomKey).get(msgId).get('content').put(newContent + ' ✏️')
+    gun.get('messages').get(roomKey).get(msgId).get('content').put(newContent + ' (edit)')
   }
 
   const deleteMessage = (msgId: string) => {

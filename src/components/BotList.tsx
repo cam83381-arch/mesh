@@ -1,5 +1,12 @@
+/**
+ * BotList.tsx — Liste des bots du serveur
+ *
+ * Persistance : localStore bots.json
+ * GunDB : ZÉRO utilisation — supprimé
+ */
+
 import { useState, useEffect } from 'react'
-import gun from '../gun'
+import { readLocal, writeLocal } from '../localStore'
 
 interface BotEntry {
   id: string
@@ -15,29 +22,44 @@ interface Props {
 
 function BotList({ serverId, onEditBot }: Props) {
   const [bots, setBots] = useState<BotEntry[]>([])
-  const botsRef: Record<string, BotEntry> = {}
 
+  // Charger les bots depuis localStore
   useEffect(() => {
     if (!serverId) return
-    const ref = gun.get('bots').get(serverId)
-    ref.map().on((bot: any, id: string) => {
-      if (!bot || !bot.id) {
-        delete botsRef[id]
-      } else {
-        botsRef[id] = { id: bot.id, name: bot.name || 'Sans nom', active: !!bot.active, lastRun: bot.lastRun }
-      }
-      setBots(Object.values(botsRef).sort((a, b) => a.name.localeCompare(b.name)))
-    })
-    return () => { ref.map().off() }
-  }, [serverId]) // eslint-disable-line
+    let active = true
 
-  const deleteBot = (botId: string) => {
+    const load = async () => {
+      const data = await readLocal<Record<string, Record<string, any>>>('bots.json')
+      if (!active) return
+      const serverBots = data?.[serverId] || {}
+      const list: BotEntry[] = Object.values(serverBots)
+        .filter((b: any) => b?.id)
+        .map((b: any) => ({ id: b.id, name: b.name || 'Sans nom', active: !!b.active, lastRun: b.lastRun }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      setBots(list)
+    }
+    load()
+
+    return () => { active = false }
+  }, [serverId])
+
+  const deleteBot = async (botId: string) => {
     if (!confirm('Supprimer ce bot ?')) return
-    gun.get('bots').get(serverId).get(botId).put(null)
+    const data = await readLocal<Record<string, Record<string, any>>>('bots.json') || {}
+    if (data[serverId]) {
+      delete data[serverId][botId]
+      await writeLocal('bots.json', data)
+      setBots(prev => prev.filter(b => b.id !== botId))
+    }
   }
 
-  const toggleActive = (bot: BotEntry) => {
-    gun.get('bots').get(serverId).get(bot.id).put({ active: !bot.active })
+  const toggleActive = async (bot: BotEntry) => {
+    const data = await readLocal<Record<string, Record<string, any>>>('bots.json') || {}
+    if (data[serverId]?.[bot.id]) {
+      data[serverId][bot.id].active = !bot.active
+      await writeLocal('bots.json', data)
+      setBots(prev => prev.map(b => b.id === bot.id ? { ...b, active: !bot.active } : b))
+    }
   }
 
   return (

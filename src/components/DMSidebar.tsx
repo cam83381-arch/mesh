@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import type { DMConversation } from '../useDMs'
 import type { Friendship } from '../useFriends'
-import gun from '../gun'
+import { readLocal } from '../localStore'
 
 const STATUS_COLORS: Record<string, string> = {
   online: '#23a559',
@@ -43,12 +43,15 @@ function DMConvRow({
 
   useEffect(() => {
     if (!otherUser) return
-    gun.get('profiles').get(otherUser).on((p: any) => {
+    let active = true
+    readLocal<Record<string, any>>('profiles.json').then(profiles => {
+      if (!active) return
+      const p = profiles?.[otherUser]
       if (!p) return
       if (p.status) setStatus(p.status)
       if (p.avatarColor) setAvatarColor(p.avatarColor)
     })
-    return () => { gun.get('profiles').get(otherUser).off() }
+    return () => { active = false }
   }, [otherUser])
 
   const statusLabel = status === 'online' ? 'En ligne'

@@ -3,18 +3,8 @@ import type { Server, Member, Role, CustomRole, Permissions } from '../types'
 import BotList from './BotList'
 import useServerEmojis from '../useServerEmojis'
 
-import gun from '../gun'
-
-// ── Helpers ──
-function initGun() {
-  return gun
-}
-
-function addLog(serverId: string, action: string, by: string, target = '') {
-  const g = initGun()
-  const id = Date.now().toString()
-  g.get('logs').get(serverId).get(id).put({ id, action, by, target, timestamp: Date.now() })
-}
+import { readLocal, writeLocal } from '../localStore'
+import { joinMeshRoom } from '../mesh'
 
 // ── Types locaux ──
 interface Invite {
@@ -39,6 +29,39 @@ interface AutoMod {
   action: 'delete' | 'warn' | 'both' | 'tempban'
   enabled: boolean
   banDuration: number // minutes (pour tempban)
+}
+
+// ── Helpers localStore ──
+type InvitesFile = Record<string, Record<string, Invite>>
+type LogsFile    = Record<string, LogEntry[]>
+
+async function loadInvites(serverId: string): Promise<Record<string, Invite>> {
+  const data = await readLocal<InvitesFile>('invites.json') || {}
+  return data[serverId] || {}
+}
+
+async function saveInvite(serverId: string, code: string, invite: Invite | null) {
+  const data = await readLocal<InvitesFile>('invites.json') || {}
+  if (!data[serverId]) data[serverId] = {}
+  if (invite === null) delete data[serverId][code]
+  else data[serverId][code] = invite
+  await writeLocal('invites.json', data)
+}
+
+async function addLog(serverId: string, action: string, by: string, target = '') {
+  const data = await readLocal<LogsFile>('logs.json') || {}
+  if (!data[serverId]) data[serverId] = []
+  const entry: LogEntry = { id: Date.now().toString(), action, by, target, timestamp: Date.now() }
+  data[serverId] = [entry, ...data[serverId]].slice(0, 100)
+  await writeLocal('logs.json', data)
+}
+
+function broadcastSettingsUpdate(serverId: string, type: string, payload?: Record<string, any>) {
+  const room = joinMeshRoom(`settings_${serverId}`)
+  if (room) {
+    const [send] = (room.makeAction as any)('settings_update') as [any, any]
+    try { send({ type, ...(payload || {}) }) } catch {}
+  }
 }
 
 // ── Constantes ──
@@ -120,7 +143,6 @@ function ServerSettings({
   onCreateRole, onUpdateCustomRole, onUpdatePermission, onDeleteRole,
   onOpenBotEditor,
 }: Props) {
-  const g = initGun()
   const isOwner = server.ownerId === username
   const [tab, setTab] = useState('profile')
 
@@ -177,41 +199,76 @@ function ServerSettings({
   const [emojiError, setEmojiError]       = useState('')
   const emojiInputRef = useRef<HTMLInputElement>(null)
 
-  // ── Charger données GunDB ──
+  // ── Charger données depuis localStore ──
+  const refreshLogs = async () => {
+    const data = await readLocal<LogsFile>('logs.json') || {}
+    setLogs((data[server.id] || []).slice(0, 100))
+  }
+
   useEffect(() => {
     if (!server.id) return
-    // Extra profil serveur
-    g.get('servers').get(server.id).once((data: any) => {
-      if (!data) return
-      if (data.description) setDescription(data.description)
-      if (data.bannerColor) setBannerColor(data.bannerColor)
-      if (data.bannerUrl)   setBannerUrl(data.bannerUrl)
-      if (data.iconUrl)     setIconUrl(data.iconUrl)
-      if (data.tags)        setTags(data.tags)
+    let active = true
+
+    // Profil serveur étendu
+    readLocal<Record<string, any>>('servers.json').then(servers => {
+      if (!active) return
+      const s = (servers || {})[server.id]
+      if (!s) return
+      if (s.description) setDescription(s.description)
+      if (s.bannerColor) setBannerColor(s.bannerColor)
+      if (s.bannerUrl)   setBannerUrl(s.bannerUrl)
+      if (s.iconUrl)     setIconUrl(s.iconUrl)
+      if (s.tags)        setTags(s.tags)
     })
     // Invitations
-    g.get('invites').get(server.id).map().on((inv: Invite, code: string) => {
-      if (!inv || !inv.code) {
-        setInvites(prev => { const n = { ...prev }; delete n[code]; return n })
-        return
-      }
-      setInvites(prev => ({ ...prev, [code]: inv }))
-    })
+    loadInvites(server.id).then(invs => { if (active) setInvites(invs) })
     // Logs
-    const logsRef: Record<string, LogEntry> = {}
-    g.get('logs').get(server.id).map().on((entry: LogEntry, id: string) => {
-      if (!entry || !entry.action) return
-      logsRef[id] = entry
-      setLogs(Object.values(logsRef).sort((a, b) => b.timestamp - a.timestamp).slice(0, 100))
-    })
+    refreshLogs()
     // AutoMod
-    g.get('automod').get(server.id).once((data: any) => {
-      if (data) setAutomod({ words: data.words || '', action: data.action || 'delete', enabled: !!data.enabled, banDuration: data.banDuration || 10 })
+    readLocal<Record<string, any>>('automod.json').then(data => {
+      if (!active) return
+      const am = (data || {})[server.id]
+      if (am) setAutomod({ words: am.words || '', action: am.action || 'delete', enabled: !!am.enabled, banDuration: am.banDuration || 10 })
     })
-    return () => {
-      g.get('invites').get(server.id).map().off()
-      g.get('logs').get(server.id).map().off()
+
+    // Écouter mises à jour P2P
+    const room = joinMeshRoom(`settings_${server.id}`)
+    if (room) {
+      const [, getUpdate] = (room.makeAction as any)('settings_update') as [any, any]
+      getUpdate(async (data: any) => {
+        if (!active) return
+        if (data?.type === 'invite') {
+          const invs = await loadInvites(server.id)
+          if (active) setInvites(invs)
+        }
+        if (data?.type === 'log') refreshLogs()
+        if (data?.type === 'profile') {
+          // Mettre à jour le profil du serveur reçu d'un pair
+          const servers = await readLocal<Record<string, any>>('servers.json') || {}
+          const merged = {
+            ...(servers[server.id] || {}),
+            ...(data.description !== undefined ? { description: data.description } : {}),
+            ...(data.bannerColor  !== undefined ? { bannerColor:  data.bannerColor  } : {}),
+            ...(data.bannerUrl    !== undefined ? { bannerUrl:    data.bannerUrl    } : {}),
+            ...(data.iconUrl      !== undefined ? { iconUrl:      data.iconUrl      } : {}),
+            ...(data.tags         !== undefined ? { tags:         data.tags         } : {}),
+            ...(data.name         !== undefined ? { name:         data.name         } : {}),
+          }
+          servers[server.id] = merged
+          await writeLocal('servers.json', servers)
+          // Mettre à jour les états locaux si le panneau est ouvert
+          if (active) {
+            if (data.description !== undefined) setDescription(data.description)
+            if (data.bannerColor  !== undefined) setBannerColor(data.bannerColor)
+            if (data.bannerUrl    !== undefined) setBannerUrl(data.bannerUrl)
+            if (data.iconUrl      !== undefined) setIconUrl(data.iconUrl)
+            if (data.tags         !== undefined) setTags(data.tags)
+          }
+        }
+      })
     }
+
+    return () => { active = false }
   }, [server.id]) // eslint-disable-line
 
   // Fermeture Échap
@@ -222,11 +279,16 @@ function ServerSettings({
   }, [onClose])
 
   // ── Sauvegarder profil serveur ──
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     if (!serverName.trim()) return
     onUpdateServer(server.id, serverName)
-    g.get('servers').get(server.id).put({ description, bannerColor, bannerUrl, iconUrl, tags })
-    addLog(server.id, `Profil serveur modifié`, username)
+    // Sauvegarder les extras dans servers.json
+    const servers = await readLocal<Record<string, any>>('servers.json') || {}
+    servers[server.id] = { ...(servers[server.id] || {}), description, bannerColor, bannerUrl, iconUrl, tags }
+    await writeLocal('servers.json', servers)
+    await addLog(server.id, 'Profil serveur modifié', username)
+    await refreshLogs()
+    broadcastSettingsUpdate(server.id, 'profile', { description, bannerColor, bannerUrl, iconUrl, tags, name: serverName })
     setProfileSaved(true)
     setTimeout(() => setProfileSaved(false), 2000)
   }
@@ -284,9 +346,8 @@ function ServerSettings({
   }
 
   // ── Créer une invitation ──
-  const handleCreateInvite = () => {
+  const handleCreateInvite = async () => {
     const code = Math.random().toString(36).slice(2, 8).toUpperCase()
-    const expiresAt = invDuration > 0 ? Date.now() + invDuration : 0
     const invite: Invite = {
       code,
       duration: invDuration,
@@ -295,22 +356,21 @@ function ServerSettings({
       createdAt: Date.now(),
       createdBy: username,
     }
-    // Stockage local (par serveur) pour l'affichage dans ServerSettings
-    g.get('invites').get(server.id).get(code).put(invite)
-    // Stockage global (par code) pour la résolution sans connaître le serverId
-    g.get('invites').get(code).put({
-      serverId: server.id,
-      createdBy: username,
-      expiresAt,
-      maxUses: invMaxUses,
-      uses: 0,
-    })
-    addLog(server.id, `Invitation créée (code ${code})`, username)
+    await saveInvite(server.id, code, invite)
+    const invs = await loadInvites(server.id)
+    setInvites(invs)
+    broadcastSettingsUpdate(server.id, 'invite')
+    await addLog(server.id, `Invitation créée (code ${code})`, username)
+    await refreshLogs()
   }
 
-  const handleDeleteInvite = (code: string) => {
-    g.get('invites').get(server.id).get(code).put(null)
-    addLog(server.id, `Invitation supprimée (code ${code})`, username)
+  const handleDeleteInvite = async (code: string) => {
+    await saveInvite(server.id, code, null)
+    const invs = await loadInvites(server.id)
+    setInvites(invs)
+    broadcastSettingsUpdate(server.id, 'invite')
+    await addLog(server.id, `Invitation supprimée (code ${code})`, username)
+    await refreshLogs()
   }
 
   const handleCopyInvite = (code: string) => {
@@ -368,9 +428,13 @@ function ServerSettings({
   }
 
   // ── Sauvegarder AutoMod ──
-  const handleSaveAutoMod = () => {
-    g.get('automod').get(server.id).put(automod)
-    addLog(server.id, `AutoMod ${automod.enabled ? 'activé' : 'désactivé'}`, username)
+  const handleSaveAutoMod = async () => {
+    const data = await readLocal<Record<string, any>>('automod.json') || {}
+    data[server.id] = automod
+    await writeLocal('automod.json', data)
+    await addLog(server.id, `AutoMod ${automod.enabled ? 'activé' : 'désactivé'}`, username)
+    await refreshLogs()
+    broadcastSettingsUpdate(server.id, 'automod')
     setAutomodSaved(true)
     setTimeout(() => setAutomodSaved(false), 2000)
   }
@@ -1217,5 +1281,57 @@ function ServerSettings({
     </div>
   )
 }
+
+export default ServerSettings
+              onClose()
+              })
+            }}>
+              🗑️ Supprimer le serveur
+            </button>
+          ) : (
+            <button className="us-tab danger" onClick={() => {
+              askConfirm(`Quitter "${server.name}" ?`, () => {
+                onLeaveServer(server.id)
+                onClose()
+              })
+            }}>
+              🚪 Quitter le serveur
+            </button>
+          )}
+        </div>
+
+        {/* Contenu */}
+        <div className="us-main">
+          {renderContent()}
+        </div>
+
+        {/* Bouton fermer */}
+        <button className="us-close-btn" onClick={onClose} title="Fermer (Échap)">✕</button>
+      </div>
+
+      {/* ── Modale de confirmation ── */}
+      {confirmModal && (
+        <div className="confirm-overlay" onClick={() => setConfirmModal(null)}>
+          <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
+            <p className="confirm-message">{confirmModal.message}</p>
+            <div className="confirm-actions">
+              <button className="confirm-btn cancel" onClick={() => setConfirmModal(null)}>
+                Annuler
+              </button>
+              <button className="confirm-btn danger" onClick={() => {
+                confirmModal.onConfirm()
+                setConfirmModal(null)
+              }}>
+                Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default ServerSettings
 
 export default ServerSettings

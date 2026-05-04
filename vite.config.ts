@@ -16,10 +16,10 @@ export default defineConfig({
         // Code splitting manuel : sépare les grosses librairies en chunks distincts
         manualChunks(id: string) {
           if (id.includes('node_modules')) {
-            if (id.includes('@xyflow'))     return 'vendor-xyflow'
+            if (id.includes('@xyflow'))      return 'vendor-xyflow'
             if (id.includes('simple-peer')) return 'vendor-peer'
             if (id.includes('gun'))         return 'vendor-gun'
-            if (id.includes('socket.io'))   return 'vendor-socket'
+            if (id.includes('trystero'))    return 'vendor-trystero'
             if (id.includes('react-router')) return 'vendor-router'
             if (id.includes('react-dom') || id.includes('react/'))
                                             return 'vendor-react'

@@ -12,7 +12,7 @@ import { VariableNode } from '../nodes/VariableNodes'
 import { UtilityNode } from '../nodes/UtilityNodes'
 import { NODE_DEFS, CATEGORY_META, type NodeCategory, type ConfigField } from '../nodes/nodeConfig'
 
-import gun from '../gun'
+import { readLocal, writeLocal } from '../localStore'
 
 // ── Build nodeTypes map ──────────────────────────────────────────
 const nodeTypes: NodeTypes = {}
@@ -55,10 +55,12 @@ function BotEditorInner({ serverId, botId, onBack }: Props) {
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({})
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
 
-  // ── Load existing bot ──────────────────────────────────────────
+  // ── Load existing bot from localStore ────────────────────────
   useEffect(() => {
     if (!botId) return
-    gun.get('bots').get(serverId).get(botId).once((raw: any) => {
+    const load = async () => {
+      const data = await readLocal<Record<string, Record<string, any>>>('bots.json')
+      const raw = data?.[serverId]?.[botId]
       if (!raw) return
       try {
         const flow: BotFlow = JSON.parse(raw.json || '{}')
@@ -67,7 +69,8 @@ function BotEditorInner({ serverId, botId, onBack }: Props) {
         setNodes(flow.nodes || [])
         setEdges(flow.edges || [])
       } catch { /* ignore malformed data */ }
-    })
+    }
+    load()
   }, [botId, serverId, setNodes, setEdges])
 
   // ── Keep selectedNode in sync when nodes change ───────────────
@@ -130,7 +133,7 @@ function BotEditorInner({ serverId, botId, onBack }: Props) {
     }))
   }
 
-  // ── Save bot to GunDB ─────────────────────────────────────────
+  // ── Save bot to localStore ────────────────────────────────────
   const saveBotflow = async () => {
     setSaveStatus('saving')
     const flow: BotFlow = {
@@ -141,25 +144,24 @@ function BotEditorInner({ serverId, botId, onBack }: Props) {
       nodes,
       edges,
     }
-    gun.get('bots').get(serverId).get(currentBotId).put({
-      id: currentBotId,
-      name: botName,
-      active: isActive,
-      json: JSON.stringify(flow),
-    })
-    setTimeout(() => {
-      // Notifier les autres pairs via GunDB (remplace l'événement Socket.io)
-      gun.get('bot_events').get(serverId).put({ event: 'bot_saved', botId: currentBotId, ts: Date.now() })
-      setSaveStatus('saved')
-    }, 400)
+    const entry = { id: currentBotId, name: botName, active: isActive, json: JSON.stringify(flow) }
+    const data = await readLocal<Record<string, Record<string, any>>>('bots.json') || {}
+    if (!data[serverId]) data[serverId] = {}
+    data[serverId][currentBotId] = entry
+    await writeLocal('bots.json', data)
+    setSaveStatus('saved')
     setTimeout(() => setSaveStatus('idle'), 2000)
   }
 
   // ── Toggle active ──────────────────────────────────────────────
-  const toggleActive = () => {
+  const toggleActive = async () => {
     const next = !isActive
     setIsActive(next)
-    gun.get('bots').get(serverId).get(currentBotId).put({ active: next })
+    const data = await readLocal<Record<string, Record<string, any>>>('bots.json') || {}
+    if (data[serverId]?.[currentBotId]) {
+      data[serverId][currentBotId].active = next
+      await writeLocal('bots.json', data)
+    }
   }
 
   // ── Delete selected node ──────────────────────────────────────

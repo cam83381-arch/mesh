@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { Server } from './types'
 import { readLocal, writeLocal } from './localStore'
 import gun from './gun'
+import { joinMeshRoom } from './mesh'
 
 const COLORS = ['#5865f2','#23a559','#f0b232','#f23f43','#f47fff','#00b0f4']
 
@@ -67,6 +68,29 @@ function useServers(username: string) {
             return [...prev, updated]
           })
         })
+
+        // Écouter les mises à jour de profil serveur (icône, bannière) via Trystero
+        const room = joinMeshRoom(`settings_${id}`)
+        if (room) {
+          const [, getUpdate] = (room.makeAction as any)('settings_update') as [any, any]
+          getUpdate(async (data: any) => {
+            if (!active || data?.type !== 'profile') return
+            const all = await loadAllServers()
+            const current = all[id] || {}
+            const merged: Server = {
+              ...current,
+              ...(data.name        !== undefined ? { name:        data.name,        label: (data.name as string).slice(0, 2).toUpperCase() } : {}),
+              ...(data.iconUrl     !== undefined ? { iconUrl:     data.iconUrl     } : {}),
+              ...(data.bannerUrl   !== undefined ? { bannerUrl:   data.bannerUrl   } : {}),
+              ...(data.bannerColor !== undefined ? { bannerColor: data.bannerColor } : {}),
+              ...(data.description !== undefined ? { description: data.description } : {}),
+              ...(data.tags        !== undefined ? { tags:        data.tags        } : {}),
+            }
+            all[id] = merged
+            await writeLocal(SERVERS_FILE, all)
+            setServers(prev => prev.map(s => s.id === id ? merged : s))
+          })
+        }
       })
     }
 
@@ -160,6 +184,37 @@ function useServers(username: string) {
   }, [joinServer])
 
   const updateServer = useCallback(async (id: string, name: string) => {
+    const label = name.slice(0, 2).toUpperCase()
+    gun.get('servers').get(id).get('name').put(name)
+    gun.get('servers').get(id).get('label').put(label)
+    const all = await loadAllServers()
+    if (all[id]) { all[id] = { ...all[id], name, label }; await writeLocal(SERVERS_FILE, all) }
+    setServers(prev => prev.map(s => s.id === id ? { ...s, name, label } : s))
+  }, [])
+
+  const deleteServer = useCallback(async (id: string) => {
+    const ids = await loadUserServerIds(username)
+    await saveUserServerIds(username, ids.filter(i => i !== id))
+    await removeServerFromFile(id)
+    gun.get('userServers').get(username).get(id).put(null)
+    gun.get('servers').get(id).once((server: Server) => {
+      if (server?.ownerId === username) gun.get('servers').get(id).put(null)
+    })
+    setServers(prev => prev.filter(s => s.id !== id))
+  }, [username])
+
+  const leaveServer = useCallback(async (id: string) => {
+    const ids = await loadUserServerIds(username)
+    await saveUserServerIds(username, ids.filter(i => i !== id))
+    gun.get('userServers').get(username).get(id).put(null)
+    setServers(prev => prev.filter(s => s.id !== id))
+  }, [username])
+
+  return { servers, loading: false, createServer, joinServer, joinByInvite, updateServer, deleteServer, leaveServer }
+}
+
+export default useServers
+ring, name: string) => {
     const label = name.slice(0, 2).toUpperCase()
     gun.get('servers').get(id).get('name').put(name)
     gun.get('servers').get(id).get('label').put(label)

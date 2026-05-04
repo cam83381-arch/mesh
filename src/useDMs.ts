@@ -1,8 +1,40 @@
+/**
+ * useDMs.ts - Messages directs P2P
+ *
+ * Persistance : localStore dms.json (conversations + messages)
+ * Transport temps reel : Trystero makeAction('dm_message') via joinMeshRoom
+ * GunDB : ZERO utilisation -- supprime
+ */
+
 import { useState, useEffect, useRef } from 'react'
 import type { Message } from './types'
-import gun from './gun'
+import { readLocal, writeLocal } from './localStore'
+import { joinMeshRoom } from './mesh'
 
-// ── Helper notification ──
+// -- Types --
+export interface DMConversation {
+  id: string              // toujours trie alphabetiquement : "alice_bob"
+  participants: string[]
+  lastMessage?: string
+  lastTimestamp?: number
+}
+
+interface DMStore {
+  conversations: Record<string, DMConversation>
+  messages: Record<string, Record<string, Message>>
+}
+
+// -- Helpers localStore --
+async function loadDMStore(): Promise<DMStore> {
+  const data = await readLocal<DMStore>('dms.json')
+  return data || { conversations: {}, messages: {} }
+}
+
+async function saveDMStore(store: DMStore): Promise<void> {
+  await writeLocal('dms.json', store)
+}
+
+// -- Notification desktop --
 function sendDMNotification(from: string, content: string) {
   if ((window as any).electron?.showNotification) {
     (window as any).electron.showNotification(`Message de ${from}`, content.slice(0, 80))
@@ -14,147 +46,209 @@ function sendDMNotification(from: string, content: string) {
   }
 }
 
-export interface DMConversation {
-  id: string        // toujours trié alphabétiquement : "alice_bob"
-  participants: string[]
-  lastMessage?: string
-  lastTimestamp?: number
-}
-
-function useDMs(username: string, dmPrivacy: 'everyone' | 'friends' = 'everyone', friends: string[] = []) {
+// -- Hook principal --
+function useDMs(
+  username: string,
+  dmPrivacy: 'everyone' | 'friends' = 'everyone',
+  friends: string[] = []
+) {
   const [conversations, setConversations] = useState<DMConversation[]>([])
   const [messages, setMessages] = useState<Message[]>([])
-  const [activeConv, setActiveConv] = useState<string | null>(null)
+  const [activeConv, setActiveConvState] = useState<string | null>(null)
   const [unreadDMs, setUnreadDMs] = useState(0)
+
   const msgsRef = useRef<Record<string, Message>>({})
   const convsRef = useRef<Record<string, DMConversation>>({})
-  const seenTimestamps = useRef<Record<string, number>>({}) // convId → dernière timestamp lue
+  const seenTimestamps = useRef<Record<string, number>>({})
+  const activeConvRef = useRef<string | null>(null)
 
-  // Charger les conversations de l'utilisateur
+  // -- Charger conversations + ecouter DMs entrants via Trystero --
   useEffect(() => {
     if (!username) return
+    let active = true
 
-    gun.get('dmConversations').get(username).map().on((convId: string, key: string) => {
-      if (!convId) {
-        delete convsRef.current[key]
-        setConversations(Object.values(convsRef.current)
-          .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0)))
-        return
-      }
+    // 1. Charger depuis localStore
+    const load = async () => {
+      const store = await loadDMStore()
+      if (!active) return
+      const myConvs = Object.values(store.conversations).filter(c =>
+        c.participants.includes(username)
+      )
+      myConvs.forEach(c => { convsRef.current[c.id] = c })
+      setConversations(
+        myConvs.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+      )
+    }
+    load()
 
-      // .on() déclenche immédiatement avec les données existantes (pas besoin de .once() en amont)
-      gun.get('dms').get(convId).on((conv: any) => {
-        if (!conv) return
-        const updated: DMConversation = {
-          id: convId,
-          participants: conv.participants ? conv.participants.split(',') : [],
-          lastMessage: conv.lastMessage || '',
-          lastTimestamp: conv.lastTimestamp || 0
+    // 2. Ecouter les DMs entrants via Trystero (room inbox personnelle)
+    const dmRoom = joinMeshRoom(`dm_inbox_${username}`)
+    if (dmRoom) {
+      const [, getDMMsg] = (dmRoom.makeAction as any)('dm_message') as [any, any]
+      const [, getDMConv] = (dmRoom.makeAction as any)('dm_conv') as [any, any]
+
+      // Recevoir un message DM d'un autre pair
+      getDMMsg(async (msg: any) => {
+        if (!active || !msg?.id || !msg?.content || !msg?.convId) return
+        if (!msg.participants?.includes(username)) return
+
+        const store = await loadDMStore()
+
+        // Creer la conv si absente
+        if (!store.conversations[msg.convId]) {
+          store.conversations[msg.convId] = {
+            id: msg.convId,
+            participants: msg.participants,
+            lastMessage: msg.content.slice(0, 50),
+            lastTimestamp: msg.timestamp
+          }
+        } else {
+          store.conversations[msg.convId].lastMessage = msg.content.slice(0, 50)
+          store.conversations[msg.convId].lastTimestamp = msg.timestamp
         }
-        convsRef.current[convId] = updated
-        setConversations(Object.values(convsRef.current)
-          .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0)))
 
-        // Badge non-lu + notification si la conv n'est pas active
-        const lastTs = conv.lastTimestamp || 0
-        const seen = seenTimestamps.current[convId] || 0
-        if (convId !== activeConv && lastTs > seen && conv.lastMessage) {
-          seenTimestamps.current[convId] = lastTs
-          // Recalculer le badge en comptant toutes les convs avec non-lus
-          const unreadCount = Object.entries(convsRef.current).filter(([cId, c]) => {
-            const ts = c.lastTimestamp || 0
-            const s = seenTimestamps.current[cId] || 0
-            return cId !== activeConv && ts > s && c.lastMessage
-          }).length
-          setUnreadDMs(unreadCount)
-          // Notification native DM
-          const parts = convId.split('_')
-          const sender = parts.find((p: string) => p !== username) || 'Quelqu\'un'
-          sendDMNotification(sender, conv.lastMessage)
+        // Sauvegarder le message
+        if (!store.messages[msg.convId]) store.messages[msg.convId] = {}
+        store.messages[msg.convId][msg.id] = msg
+        await saveDMStore(store)
+
+        // Mettre a jour le state
+        convsRef.current[msg.convId] = store.conversations[msg.convId]
+        setConversations(
+          Object.values(convsRef.current)
+            .filter(c => c.participants.includes(username))
+            .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+        )
+
+        if (activeConvRef.current === msg.convId) {
+          // Conv ouverte -> afficher directement
+          msgsRef.current[msg.id] = msg
+          setMessages(
+            Object.values(msgsRef.current)
+              .filter(m => m?.content)
+              .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+          )
+        } else {
+          // Conv fermee -> badge + notification
+          const sender = msg.participants.find((p: string) => p !== username) || 'Quelqu\'un'
+          sendDMNotification(sender, msg.content)
+          setUnreadDMs(prev => prev + 1)
         }
       })
-    })
 
-    return () => {
-      gun.get('dmConversations').get(username).map().off()
+      // Recevoir une creation de conv (l'expediteur notifie le destinataire)
+      getDMConv(async (conv: any) => {
+        if (!active || !conv?.id || !conv?.participants?.includes(username)) return
+        const store = await loadDMStore()
+        if (!store.conversations[conv.id]) {
+          store.conversations[conv.id] = conv
+          await saveDMStore(store)
+          convsRef.current[conv.id] = conv
+          setConversations(
+            Object.values(convsRef.current)
+              .filter(c => c.participants.includes(username))
+              .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+          )
+        }
+      })
     }
+
+    return () => { active = false }
   }, [username])
 
-  // Charger les messages de la conversation active
+  // -- Charger les messages de la conv active --
   useEffect(() => {
-    if (!activeConv) return
-
-    msgsRef.current = {}
-    setMessages([])
-
-    gun.get('dmMessages').get(activeConv).map().on((msg: Message, id: string) => {
-      if (!msg || !msg.content) {
-        delete msgsRef.current[id]
-        setMessages(Object.values(msgsRef.current)
-          .filter(m => m && m.content)
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)))
-        return
-      }
-      msgsRef.current[id] = { ...msg, id }
-      setMessages(Object.values(msgsRef.current)
-        .filter(m => m && m.content)
-        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)))
-    })
-
-    return () => {
-      gun.get('dmMessages').get(activeConv).map().off()
-    }
-  }, [activeConv])
-
-  // Créer ou ouvrir une conversation avec un utilisateur
-  const openConversation = (otherUser: string) => {
-    if (!username || !otherUser || otherUser === username) return
-    // Respecter la privacy : si la cible a dmPrivacy=friends, vérifier l'amitié
-    // (côté local : si MOI j'ai dmPrivacy=friends, je ne peux envoyer qu'à mes amis)
-    // Note: enforcement côté destinataire est géré par GunDB read dans sendDM
-
-    // ID de conv = les deux usernames triés alphabétiquement
-    const convId = [username, otherUser].sort().join('_')
-
-    // Créer la conv dans GunDB si elle n'existe pas
-    gun.get('dms').get(convId).once((existing: any) => {
-      if (!existing || !existing.participants) {
-        gun.get('dms').get(convId).put({
-          participants: [username, otherUser].sort().join(','),
-          lastMessage: '',
-          lastTimestamp: Date.now()
-        })
-      }
-    })
-
-    // Lier la conv aux deux participants
-    gun.get('dmConversations').get(username).get(convId).put(convId)
-    gun.get('dmConversations').get(otherUser).get(convId).put(convId)
-
-    setActiveConv(convId)
-    return convId
-  }
-
-  const sendDM = (content: string, replyTo?: { id: string; author: string; content: string }) => {
-    if (!activeConv || !content.trim() || !username) return
-    // Vérifier la privacy de l'expéditeur
-    const convParts = activeConv.split('_')
-    const recipient = convParts.find((p: string) => p !== username) || ''
-    if (dmPrivacy === 'friends' && recipient && !friends.includes(recipient)) {
-      console.warn('[DM] Bloque par dmPrivacy=friends:', recipient, 'pas un ami')
+    activeConvRef.current = activeConv
+    if (!activeConv) {
+      setMessages([])
+      msgsRef.current = {}
       return
     }
 
+    let active = true
+    msgsRef.current = {}
+    setMessages([])
+
+    const load = async () => {
+      const store = await loadDMStore()
+      if (!active) return
+      const convMsgs = store.messages[activeConv] || {}
+      msgsRef.current = { ...convMsgs }
+      setMessages(
+        Object.values(convMsgs)
+          .filter(m => m?.content)
+          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+      )
+      // Marquer comme lu
+      const conv = store.conversations[activeConv]
+      if (conv?.lastTimestamp) seenTimestamps.current[activeConv] = conv.lastTimestamp
+    }
+    load()
+
+    return () => { active = false }
+  }, [activeConv])
+
+  // -- Creer ou ouvrir une conversation --
+  const openConversation = async (otherUser: string) => {
+    if (!username || !otherUser || otherUser === username) return
+    const convId = [username, otherUser].sort().join('_')
+
+    const store = await loadDMStore()
+    if (!store.conversations[convId]) {
+      const conv: DMConversation = {
+        id: convId,
+        participants: [username, otherUser].sort(),
+        lastMessage: '',
+        lastTimestamp: Date.now()
+      }
+      store.conversations[convId] = conv
+      await saveDMStore(store)
+      convsRef.current[convId] = conv
+      setConversations(
+        Object.values(convsRef.current)
+          .filter(c => c.participants.includes(username))
+          .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+      )
+
+      // Notifier l'autre pair qu'une conv est ouverte
+      const theirRoom = joinMeshRoom(`dm_inbox_${otherUser}`)
+      if (theirRoom) {
+        const [sendConv] = (theirRoom.makeAction as any)('dm_conv') as [any, any]
+        try { sendConv(conv) } catch {}
+      }
+    }
+
+    setActiveConvState(convId)
+    return convId
+  }
+
+  // -- Envoyer un DM --
+  const sendDM = async (
+    content: string,
+    replyTo?: { id: string; author: string; content: string }
+  ) => {
+    if (!activeConv || !content.trim() || !username) return
+
+    const recipient = activeConv.split('_').find((p: string) => p !== username) || ''
+    if (dmPrivacy === 'friends' && recipient && !friends.includes(recipient)) {
+      console.warn('[DM] Bloque par dmPrivacy=friends:', recipient)
+      return
+    }
+
+    const conv = convsRef.current[activeConv]
     const msgId = Date.now().toString()
     const message: Message = {
       id: msgId,
       channelId: activeConv,
       authorId: username,
       authorName: username,
+      author: username,
       content,
       color: '#5865f2',
       time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
       timestamp: Date.now(),
+      convId: activeConv,
+      participants: conv?.participants || [username, recipient],
       ...(replyTo ? {
         replyToId: replyTo.id,
         replyToAuthor: replyTo.author,
@@ -162,30 +256,58 @@ function useDMs(username: string, dmPrivacy: 'everyone' | 'friends' = 'everyone'
       } : {})
     }
 
-    gun.get('dmMessages').get(activeConv).get(msgId).put(message)
+    // Optimiste : afficher immediatement
+    msgsRef.current[msgId] = message
+    setMessages(
+      Object.values(msgsRef.current)
+        .filter(m => m?.content)
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+    )
 
-    // Mettre à jour le dernier message de la conv
-    gun.get('dms').get(activeConv).get('lastMessage').put(content.slice(0, 50))
-    gun.get('dms').get(activeConv).get('lastTimestamp').put(Date.now())
-  }
-
-  const getOtherUser = (conv: DMConversation) => {
-    return conv.participants.find(p => p !== username) || ''
-  }
-
-  // Ouvrir une conv et marquer comme lue — recalcule les non-lus des AUTRES convs
-  const openConvAndRead = (convId: string) => {
-    setActiveConv(convId)
-    const conv = convsRef.current[convId]
-    if (conv?.lastTimestamp) {
-      seenTimestamps.current[convId] = conv.lastTimestamp
+    // Persister localement
+    const store = await loadDMStore()
+    if (!store.messages[activeConv]) store.messages[activeConv] = {}
+    store.messages[activeConv][msgId] = message
+    if (store.conversations[activeConv]) {
+      store.conversations[activeConv].lastMessage = content.slice(0, 50)
+      store.conversations[activeConv].lastTimestamp = Date.now()
     }
-    // Recalculer le badge en excluant la conv qu'on vient d'ouvrir
+    await saveDMStore(store)
+
+    // Mettre a jour la liste convs
+    if (convsRef.current[activeConv]) {
+      convsRef.current[activeConv].lastMessage = content.slice(0, 50)
+      convsRef.current[activeConv].lastTimestamp = Date.now()
+      setConversations(
+        Object.values(convsRef.current)
+          .filter(c => c.participants.includes(username))
+          .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
+      )
+    }
+
+    // Envoyer via Trystero a la room inbox du destinataire
+    if (recipient) {
+      const theirRoom = joinMeshRoom(`dm_inbox_${recipient}`)
+      if (theirRoom) {
+        const [sendMsg] = (theirRoom.makeAction as any)('dm_message') as [any, any]
+        try { sendMsg(message) } catch {}
+      }
+    }
+  }
+
+  const getOtherUser = (conv: DMConversation) =>
+    conv.participants.find(p => p !== username) || ''
+
+  // Ouvrir une conv et recalculer les non-lus
+  const openConvAndRead = (convId: string) => {
+    setActiveConvState(convId)
+    const conv = convsRef.current[convId]
+    if (conv?.lastTimestamp) seenTimestamps.current[convId] = conv.lastTimestamp
     const remaining = Object.entries(convsRef.current).filter(([cId, c]) => {
       if (cId === convId) return false
-      const ts = (c as any).lastTimestamp || 0
+      const ts = c.lastTimestamp || 0
       const s = seenTimestamps.current[cId] || 0
-      return ts > s && (c as any).lastMessage
+      return ts > s && c.lastMessage
     }).length
     setUnreadDMs(remaining)
   }

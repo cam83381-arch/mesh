@@ -4,7 +4,8 @@ import type { Friendship } from '../useFriends'
 import MemberTooltip from './MemberTooltip'
 import { useApp } from '../context/AppContext'
 import { getAvatarGradient } from '../utils/avatarGradient'
-import gun from '../gun'
+import { readLocal } from '../localStore'
+import { onPeerProfile } from '../mesh'
 
 const ROLE_COLORS: Record<Role, string> = {
   owner: '#f47fff',
@@ -55,62 +56,49 @@ function MembersPanel({ members, serverId, customRoles, friends, onOpenDM, onAdd
 
   useEffect(() => {
     if (!serverId || members.length === 0) return
-    const usernames = members.map(m => m.username)
-    const cleanups: (() => void)[] = []
+    let active = true
 
-    usernames.forEach(uname => {
-      const member = members.find(m => m.username === uname)!
-      const ref = gun.get('profiles').get(uname)
+    const loadProfiles = async () => {
+      const profiles = await readLocal<Record<string, any>>('profiles.json') || {}
+      if (!active) return
 
-      // Full profile load (handles large base64 fields like avatarImage)
-      const loadFull = () => {
-        ref.once((profile: any) => {
-          if (!profile) return
-          setOnlineMembers(prev => ({
-            ...prev,
-            [uname]: {
-              ...member,
-              status:       profile.status       || 'online',
-              avatarColor:  profile.avatarColor   || '#6354ff',
-              avatarImage:  profile.avatarImage   || undefined,
-              displayName:  profile.displayName   || '',
-            }
-          }))
-        })
-      }
-
-      // Initial load
-      loadFull()
-
-      // Light fields via .on()
-      const lightCb = (profile: any) => {
-        if (!profile) return
-        setOnlineMembers(prev => {
-          const existing = prev[uname] || { ...member }
-          return {
-            ...prev,
-            [uname]: {
-              ...existing,
-              status:      profile.status      ?? existing.status ?? 'online',
-              avatarColor: profile.avatarColor ?? existing.avatarColor ?? '#6354ff',
-              displayName: profile.displayName ?? existing.displayName ?? '',
-            }
-          }
-        })
-      }
-      ref.on(lightCb)
-
-      // updatedAt triggers full re-fetch to catch photo changes
-      const updatedAtCb = () => { loadFull() }
-      ref.get('updatedAt').on(updatedAtCb)
-
-      cleanups.push(() => {
-        ref.off(lightCb)
-        ref.get('updatedAt').off(updatedAtCb)
+      const updates: Record<string, any> = {}
+      members.forEach(member => {
+        const profile = profiles[member.username]
+        updates[member.username] = {
+          ...member,
+          status:      profile?.status      || 'online',
+          avatarColor: profile?.avatarColor || '#6354ff',
+          avatarImage: profile?.avatarImage || undefined,
+          displayName: profile?.displayName || '',
+        }
       })
+      setOnlineMembers(updates)
+    }
+
+    loadProfiles()
+
+    // Mettre à jour quand un profil pair arrive en temps réel
+    const unsubscribe = onPeerProfile((_peerId, peerProfile) => {
+      if (!active || !peerProfile?.username) return
+      const member = members.find(m => m.username === peerProfile.username)
+      if (!member) return
+      setOnlineMembers(prev => ({
+        ...prev,
+        [peerProfile.username]: {
+          ...(prev[peerProfile.username] || member),
+          status:      peerProfile.status      || 'online',
+          avatarColor: peerProfile.avatarColor || '#6354ff',
+          avatarImage: peerProfile.avatarImage || undefined,
+          displayName: peerProfile.displayName || '',
+        }
+      }))
     })
 
-    return () => { cleanups.forEach(fn => fn()) }
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [serverId, members.map(m => m.username).join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Groupements ──

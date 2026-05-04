@@ -1,93 +1,16 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, Notification, desktopCapturer } = require('electron')
 const path = require('path')
-const { spawn, fork } = require('child_process')
-const http = require('http')
 
 // ── Variables globales ──
 let mainWindow = null
 let tray = null
-let serverProcess = null
 let isQuitting = false
 
 const fs = require('fs')
 const _distExists = fs.existsSync(path.join(__dirname, '..', 'dist', 'index.html'))
 const isDev = process.argv.includes('--dev') || process.env.NODE_ENV === 'development' || (!app.isPackaged && !_distExists)
 
-// ── Démarrer le serveur backend ──
-function startBackendServer() {
-  const serverPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'server', 'index.js')
-    : path.join(__dirname, '..', 'server', 'index.js')
-
-  const uploadsDir = app.isPackaged
-    ? path.join(app.getPath('userData'), 'uploads')
-    : path.join(__dirname, '..', 'server', 'uploads')
-
-  const dataDir = app.isPackaged
-    ? path.join(app.getPath('userData'), 'data')
-    : path.join(__dirname, '..', 'server')
-
-  const env = {
-    ...process.env,
-    NODE_ENV: 'production',
-    UPLOADS_DIR: uploadsDir,
-    DATA_DIR: dataDir,
-    // Ajouter server/node_modules dans le PATH de recherche modules
-    NODE_PATH: app.isPackaged
-      ? path.join(process.resourcesPath, 'server', 'node_modules')
-      : path.join(__dirname, '..', 'server', 'node_modules')
-  }
-
-  // Utiliser fork() d'Electron — exécute le script avec le Node.js embarqué
-  // sans dépendre d'un `node` externe dans le PATH
-  try {
-    serverProcess = fork(serverPath, [], {
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env,
-      cwd: app.isPackaged ? path.join(process.resourcesPath, 'server') : path.join(__dirname, '..', 'server')
-    })
-  } catch (e) {
-    // Fallback : spawn avec node système
-    console.error('fork() échoué, tentative spawn node:', e.message)
-    const nodeBin = process.platform === 'win32' ? 'node.exe' : 'node'
-    serverProcess = spawn(nodeBin, [serverPath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-      cwd: app.isPackaged ? path.join(process.resourcesPath, 'server') : path.join(__dirname, '..', 'server')
-    })
-  }
-
-  serverProcess.stdout && serverProcess.stdout.on('data', (data) => {
-    console.log('[Server]', data.toString().trim())
-  })
-  serverProcess.stderr && serverProcess.stderr.on('data', (data) => {
-    console.error('[Server ERR]', data.toString().trim())
-  })
-  serverProcess.on('close', (code) => {
-    console.log('[Server] Arrêté avec code :', code)
-  })
-  serverProcess.on('error', (err) => {
-    console.error('[Server SPAWN ERR]', err.message)
-  })
-}
-
-// ── Attendre que le serveur soit prêt ──
-function waitForServer(url, retries = 20, delay = 500) {
-  return new Promise((resolve, reject) => {
-    const attempt = () => {
-      http.get(url, (res) => {
-        resolve()
-      }).on('error', () => {
-        if (retries-- > 0) {
-          setTimeout(attempt, delay)
-        } else {
-          reject(new Error('Serveur non disponible'))
-        }
-      })
-    }
-    attempt()
-  })
-}
+// Plus de serveur backend — architecture 100% P2P (Trystero WebRTC + localStore)
 
 // ── Créer la fenêtre principale ──
 function createMainWindow() {
@@ -302,17 +225,6 @@ if (!gotLock) {
 app.whenReady().then(async () => {
   createAppMenu()
   createTray()
-
-  if (!isDev) {
-    startBackendServer()
-    try {
-      await waitForServer('http://localhost:3001')
-      console.log('[Electron] Backend prêt')
-    } catch {
-      console.warn('[Electron] Backend non disponible, on continue quand même')
-    }
-  }
-
   createMainWindow()
 
   // ── Partage d'écran ──
@@ -345,10 +257,6 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true
-  if (serverProcess) {
-    serverProcess.kill()
-    serverProcess = null
-  }
 })
 
 // ── Auto-updater (electron-updater + GitHub Releases) ──

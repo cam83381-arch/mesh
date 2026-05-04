@@ -1,82 +1,120 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { CustomRole, Permissions } from './types'
-import gun from './gun'
+import { readLocal, writeLocal } from './localStore'
+import { joinMeshRoom } from './mesh'
 
+const FILE = 'roles.json'
 const DEFAULT_COLORS = ['#f47fff', '#f23f43', '#23a559', '#5865f2', '#faa61a', '#eb459e', '#57f287']
+
+async function loadRoles(serverId: string): Promise<Record<string, CustomRole>> {
+  const data = await readLocal<Record<string, Record<string, CustomRole>>>(FILE) || {}
+  return data[serverId] || {}
+}
+
+async function saveRoles(serverId: string, roles: Record<string, CustomRole>) {
+  const data = await readLocal<Record<string, Record<string, CustomRole>>>(FILE) || {}
+  data[serverId] = roles
+  await writeLocal(FILE, data)
+}
 
 function useRoles(serverId: string) {
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([])
+  const sendRoleFn = useRef<((data: any) => void) | null>(null)
 
+  const sortRoles = (roles: Record<string, CustomRole>) =>
+    Object.values(roles).sort((a, b) => b.position - a.position)
+
+  // ── Charger depuis disque + setup Trystero sync ──────────────
   useEffect(() => {
     if (!serverId) return
+    let active = true
 
-    const rolesRef: Record<string, CustomRole> = {}
-
-    gun.get('roles').get(serverId).map().on((role: CustomRole, id: string) => {
-      if (!role || !role.name) {
-        delete rolesRef[id]
-        setCustomRoles(Object.values(rolesRef).sort((a, b) => b.position - a.position))
-        return
-      }
-      rolesRef[id] = { ...role, id }
-      setCustomRoles(Object.values(rolesRef).sort((a, b) => b.position - a.position))
+    loadRoles(serverId).then(roles => {
+      if (!active) return
+      setCustomRoles(sortRoles(roles))
     })
 
-    return () => {
-      gun.get('roles').get(serverId).map().off()
+    // Trystero room pour sync cross-machine
+    const room = joinMeshRoom(`roles_${serverId}`)
+    if (room) {
+      const [sendRole, getRole] = (room.makeAction as any)('role_update') as [any, any]
+      sendRoleFn.current = sendRole
+
+      // Recevoir un rôle mis à jour / supprimé depuis un pair
+      getRole(async (role: any) => {
+        if (!active || !role?.id) return
+        const roles = await loadRoles(serverId)
+        if (role._deleted) {
+          delete roles[role.id]
+        } else {
+          roles[role.id] = role
+        }
+        await saveRoles(serverId, roles)
+        setCustomRoles(sortRoles(roles))
+      })
+
+      // Quand un nouveau pair rejoint, lui envoyer tous nos rôles
+      room.onPeerJoin(async () => {
+        const roles = await loadRoles(serverId)
+        Object.values(roles).forEach(r => {
+          try { sendRole(r) } catch {}
+        })
+      })
     }
+
+    return () => { active = false }
   }, [serverId])
 
-  const createRole = (name: string) => {
+  const createRole = async (name: string) => {
     if (!serverId || !name.trim()) return
     const id = Date.now().toString()
     const color = DEFAULT_COLORS[customRoles.length % DEFAULT_COLORS.length]
     const role: CustomRole = {
-      id,
-      name: name.trim(),
-      color,
-      serverId,
-      position: customRoles.length,
+      id, name: name.trim(), color, serverId, position: customRoles.length,
       permissions: {
-        canSendMessages: true,
-        canDeleteMessages: false,
-        canManageChannels: false,
-        canKickMembers: false,
-        canBanMembers: false,
-        canManageRoles: false,
-        canMuteMembers: false,
+        canSendMessages: true, canDeleteMessages: false,
+        canManageChannels: false, canKickMembers: false,
+        canBanMembers: false, canManageRoles: false, canMuteMembers: false,
       }
     }
-    gun.get('roles').get(serverId).get(id).put(role)
+    const roles = await loadRoles(serverId)
+    roles[id] = role
+    await saveRoles(serverId, roles)
+    setCustomRoles(sortRoles(roles))
+    try { sendRoleFn.current?.(role) } catch {}
   }
 
-  const updateRole = (roleId: string, updates: Partial<Omit<CustomRole, 'id' | 'serverId'>>) => {
-    const role = customRoles.find(r => r.id === roleId)
-    if (!role) return
-    const updated = { ...role, ...updates }
-    gun.get('roles').get(serverId).get(roleId).put(updated)
-    setCustomRoles(prev => prev.map(r => r.id === roleId ? updated : r))
+  const updateRole = async (roleId: string, updates: Partial<Omit<CustomRole, 'id' | 'serverId'>>) => {
+    const roles = await loadRoles(serverId)
+    if (!roles[roleId]) return
+    roles[roleId] = { ...roles[roleId], ...updates }
+    await saveRoles(serverId, roles)
+    setCustomRoles(sortRoles(roles))
+    try { sendRoleFn.current?.(roles[roleId]) } catch {}
   }
 
-  const updatePermission = (roleId: string, permission: keyof Permissions, value: boolean) => {
-    const role = customRoles.find(r => r.id === roleId)
-    if (!role) return
-    const updated = {
-      ...role,
-      permissions: { ...role.permissions, [permission]: value }
+  const updatePermission = async (roleId: string, permission: keyof Permissions, value: boolean) => {
+    const roles = await loadRoles(serverId)
+    if (!roles[roleId]) return
+    roles[roleId] = { ...roles[roleId], permissions: { ...roles[roleId].permissions, [permission]: value } }
+    await saveRoles(serverId, roles)
+    setCustomRoles(sortRoles(roles))
+    try { sendRoleFn.current?.(roles[roleId]) } catch {}
+  }
+
+  const deleteRole = async (roleId: string) => {
+    const roles = await loadRoles(serverId)
+    const deleted = roles[roleId]
+    delete roles[roleId]
+    await saveRoles(serverId, roles)
+    setCustomRoles(sortRoles(roles))
+    if (deleted) {
+      try { sendRoleFn.current?.({ ...deleted, _deleted: true }) } catch {}
     }
-    gun.get('roles').get(serverId).get(roleId).put(updated)
-    setCustomRoles(prev => prev.map(r => r.id === roleId ? updated : r))
   }
 
-  const deleteRole = (roleId: string) => {
-    gun.get('roles').get(serverId).get(roleId).put(null)
-    setCustomRoles(prev => prev.filter(r => r.id !== roleId))
-  }
-
-  const getRoleById = (roleId: string): CustomRole | undefined => {
-    return customRoles.find(r => r.id === roleId)
-  }
+  const getRoleById = (roleId: string): CustomRole | undefined =>
+    customRoles.find(r => r.id === roleId)
 
   return { customRoles, createRole, updateRole, updatePermission, deleteRole, getRoleById }
 }

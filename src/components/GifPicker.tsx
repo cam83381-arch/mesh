@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const TENOR_KEY = 'AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCDY'
+const TENOR_KEY = (import.meta.env.VITE_TENOR_KEY as string) || 'LIVDSRZULELA'
 const TENOR_BASE = 'https://tenor.googleapis.com/v2'
 const LIMIT = 24
 
@@ -72,7 +72,6 @@ function GifPicker({ onSelect, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
 
   const load = useCallback(async (q: string, catIndex: number) => {
     setLoading(true)

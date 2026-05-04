@@ -1,11 +1,13 @@
 /**
- * useVoicePresence.ts — Lit gun.get('voice_presence') pour TOUS les salons vocaux
- * et construit un map channelId → membres présents.
- * Utilisé par ChannelSidebar pour afficher qui est dans quel salon.
+ * useVoicePresence.ts — Presence vocale pour TOUS les salons
+ * Recoie les evenements Trystero 'voice_presence' diffuses par useStream.ts
+ * et construit un map channelId -> membres presents.
+ * Utilise par ChannelSidebar pour afficher qui est dans quel salon.
  */
 
 import { useState, useEffect, useRef } from 'react'
-import gun from './gun'
+import { joinMeshRoom } from './mesh'
+import { readLocal } from './localStore'
 import type { Channel } from './types'
 
 interface VoicePresenceMember {
@@ -26,55 +28,66 @@ function useVoicePresence(channels: Channel[], serverId: string) {
     const voiceChannels = channels.filter(c => c.type === 'voice')
     if (voiceChannels.length === 0) return
 
+    let active = true
     const cleanups: (() => void)[] = []
-
-    voiceChannels.forEach(channel => {
-      if (!presenceRef.current[channel.id]) presenceRef.current[channel.id] = {}
-
-      const node = gun.get('voice_presence').get(channel.id)
-
-      const handler = (data: any, username: string) => {
-        if (!username || username === '_' || !presenceRef.current[channel.id]) return
-        const isActive = data && data.active === true && (Date.now() - (data.ts || 0)) < 30000
-        if (isActive) {
-          presenceRef.current[channel.id][username] = { active: true, ts: data.ts || Date.now() }
-          // Charger l'avatar si pas encore chargé
-          if (!avatarRef.current[username]) {
-            gun.get('profiles').get(username).once((profile: any) => {
-              if (profile?.avatarImage) {
-                avatarRef.current[username] = profile.avatarImage
-                rebuildPresence()
-              }
-            })
-          }
-        } else {
-          delete presenceRef.current[channel.id][username]
-        }
-        rebuildPresence()
-      }
-
-      node.map().on(handler)
-      cleanups.push(() => node.map().off())
-    })
 
     const rebuildPresence = () => {
       const next: Record<string, VoicePresenceMember[]> = {}
       Object.entries(presenceRef.current).forEach(([channelId, users]) => {
         next[channelId] = Object.entries(users)
           .filter(([, d]) => d.active && (Date.now() - d.ts) < 30000)
-          .map(([username]) => ({
-            username,
-            avatarImage: avatarRef.current[username]
+          .map(([user]) => ({
+            username: user,
+            avatarImage: avatarRef.current[user]
           }))
       })
       setVoicePresence(next)
     }
+
+    const loadAvatar = async (username: string) => {
+      if (avatarRef.current[username]) return
+      const profiles = await readLocal<Record<string, any>>('profiles.json')
+      const profile = profiles?.[username]
+      if (profile?.avatarImage) {
+        avatarRef.current[username] = profile.avatarImage
+        rebuildPresence()
+      }
+    }
+
+    voiceChannels.forEach(channel => {
+      if (!presenceRef.current[channel.id]) presenceRef.current[channel.id] = {}
+
+      // Ecouter la presence via Trystero (meme room que useStream joinVoice)
+      const room = joinMeshRoom(`voice_${channel.id}`)
+      if (!room) return
+
+      const [, getPresence] = (room.makeAction as any)('voice_presence') as [any, any]
+
+      getPresence((data: any) => {
+        if (!active || !data?.user) return
+        const { user, active: isActive } = data
+        if (!presenceRef.current[channel.id]) presenceRef.current[channel.id] = {}
+
+        if (isActive) {
+          presenceRef.current[channel.id][user] = { active: true, ts: Date.now() }
+          loadAvatar(user)
+        } else {
+          delete presenceRef.current[channel.id][user]
+        }
+        rebuildPresence()
+      })
+
+      cleanups.push(() => {
+        // Pas de cleanup necessaire pour makeAction — le room reste actif
+      })
+    })
 
     // Nettoyage stale presence toutes les 15s
     const interval = setInterval(rebuildPresence, 15000)
     cleanups.push(() => clearInterval(interval))
 
     return () => {
+      active = false
       cleanups.forEach(fn => fn())
       presenceRef.current = {}
     }

@@ -1,20 +1,21 @@
 ================================================================================
                            MESH PROJECT - INSTRUCTIONS
                     A P2P Desktop Clone of Discord (Electron)
-                              Last Updated: 2026-04-28
+                              Last Updated: 2026-05-05
 ================================================================================
 
 ┌─ PROJECT IDENTITY ──────────────────────────────────────────────────────────┐
 │ Name: Mesh (consumer) / Mesh Pro (enterprise)                              │
 │ Type: Desktop-only (Electron). NO web/mobile versions.                     │
 │ Tagline: Decentralized Discord. Your data, your server.                    │
-│ Tech Stack: Electron 34 + React 19 + TypeScript + Vite 8 + GunDB + WebRTC │
-│ Networking: Trystero (BitTorrent trackers) + WebRTC DataChannels + GunDB   │
+│ Tech Stack: Electron 34 + React 19 + TypeScript + Vite 8 + WebRTC         │
+│ Networking: Trystero (BitTorrent trackers) + WebRTC DataChannels           │
+│ Persistance: localStore (IPC → AppData JSON) — GunDB = messages cache seul │
 │ Build Output: dist/ (frontend) + release/ (electron distributable)         │
-│ Current version: 1.3.0                                                     │
+│ Current version: 1.4.0                                                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ CRITICAL ARCHITECTURE (v1.3.x — PURE P2P, NO CENTRAL SERVER) ─────────────┐
+┌─ CRITICAL ARCHITECTURE (v1.4.x — PURE P2P, ZERO SERVEUR, ZERO LOCALHOST) ──┐
 │                                                                             │
 │ TRANSPORT STACK:                                                            │
 │  1. Trystero (@trystero/torrent) → signaling via trackers BitTorrent publics│
@@ -102,14 +103,14 @@
 │  │  ├─ useAppUI.ts                  État UI centralisé                     │
 │  │  └─ ...                                                                 │
 │  │                                                                         │
-│  ├─ useSocket.ts                    GunDB messages, réactions, typing P2P  │
-│  ├─ useStream.ts                    WebRTC P2P via GunDB signaling + STUN  │
-│  ├─ useServers.ts                   Server CRUD (local + GunDB)            │
-│  ├─ useChannels.ts                  Channel CRUD (local + GunDB)           │
-│  ├─ useMembers.ts                   Member management (local + GunDB)      │
-│  ├─ useRoles.ts                     Custom roles CRUD (GunDB)              │
-│  ├─ useDMs.ts                       Private messages (GunDB)               │
-│  ├─ useProfile.ts                   User profile (GunDB)                   │
+│  ├─ useSocket.ts                    Messages/réactions (GunDB radisk+P2P)  │
+│  ├─ useStream.ts                    WebRTC P2P (STUN, screen share)        │
+│  ├─ useServers.ts                   Server CRUD (localStore ✓ migré)       │
+│  ├─ useChannels.ts                  Channel CRUD (localStore — à migrer)   │
+│  ├─ useMembers.ts                   Members (localStore — à migrer)        │
+│  ├─ useRoles.ts                     Rôles (localStore — à migrer)          │
+│  ├─ useDMs.ts                       DMs privés (localStore — à migrer)     │
+│  ├─ useProfile.ts                   Profils (localStore ✓ migré)           │
 │  ├─ useBotEngine.ts                 Client-side bot runtime                │
 │  ├─ useAuth.ts                      Auth locale (users.json + userIndex)   │
 │  └─ ...                                                                    │
@@ -122,26 +123,72 @@
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─ GUNDB PATHS (référence critique) ──────────────────────────────────────────┐
+┌─ RÈGLE ARCHITECTURALE CRITIQUE : GUNDB ≠ PERSISTANCE ──────────────────────┐
 │                                                                             │
-│ Messages:    messages.{serverId}_{channelId}.{msgId}                       │
-│ Réactions:   reactions.{serverId}_{channelId}.{msgId}.{emoji}.{user}       │
-│ Typing:      (via Trystero P2P — pas GunDB)                                │
-│ Profils:     profiles.{username}                                           │
-│ Serveurs:    servers.{serverId}                                             │
-│ Membres:     members.{serverId}.{username}                                 │
-│ Channels:    channels.{serverId} (array JSON)                              │
-│ AutoMod:     automod.{serverId}                                            │
-│ Bots:        bots.{serverId}.{botId} ({id, name, active, json})            │
-│ Bot events:  bot_events.{serverId}                                         │
-│ Invites:     invites.{code}                                                │
-│ UserIndex:   userIndex.{username_lowercase} ({exists, username, createdAt})│
-│ Voice:       voice_presence.{channelId}.{username}                         │
-│ Stream:      stream_presence.{username}                                    │
-│ Webhooks:    webhooks.{token}                                              │
-│ Channel perms: channel_perms.{serverId}.{channelId}.{overrideId}          │
-│ Kicked:      kicked.{serverId}.{username}                                  │
-│ ServerIndex: serverIndex.{serverId} (tags, name — TODO)                   │
+│ PRINCIPE FONDAMENTAL (v1.3.x+) :                                           │
+│                                                                             │
+│   GunDB  →  CACHE MESSAGES UNIQUEMENT (radisk local, peers: [])            │
+│   localStore (IPC) → TOUTE la persistance (profils, serveurs, membres...)  │
+│   Trystero (WebRTC) → TRANSPORT TEMPS RÉEL (profils, présence, réactions)  │
+│                                                                             │
+│ RÈGLES STRICTES :                                                           │
+│                                                                             │
+│  ✗ INTERDIT — GunDB pour données persistantes :                            │
+│    - Profils (useProfile.ts) → localStore profiles.json                    │
+│    - Serveurs/métadonnées (useServers.ts) → localStore servers.json        │
+│    - Membres (useMembers.ts) → localStore members.json                     │
+│    - Channels (useChannels.ts) → localStore channels.json                  │
+│    - Rôles (useRoles.ts) → localStore roles.json                           │
+│    - DMs (useDMs.ts) → localStore dms.json                                 │
+│    - Bots config (useBotEngine.ts) → localStore bots.json                 │
+│    - Bannières/tags serveur → localStore servers.json via updateServerFull │
+│    - AutoMod config → localStore automod.json                              │
+│    - Webhooks → localStore webhooks.json                                   │
+│    - Rôles canaux / perms → localStore channel_perms.json                  │
+│                                                                             │
+│  ✓ AUTORISÉ — GunDB limité à :                                             │
+│    - gun.get('messages') → cache local radisk pour l'historique chat       │
+│    - gun.get('reactions') → cache local radisk                             │
+│    - gun.get('userIndex') → annuaire public cross-machine (pseudo seul)    │
+│    - gun.get('servers').get(id) → découverte cross-machine pour joinServer  │
+│    - gun.get('invites') → codes d'invitation cross-machine                 │
+│                                                                             │
+│  ✓ TRANSPORT TEMPS RÉEL (Trystero uniquement) :                            │
+│    - Profils en ligne → broadcastProfile() / onPeerProfile()               │
+│    - Présence membres → joinMeshRoom('presence_{serverId}')                │
+│    - Mises à jour serveur → joinMeshRoom('server_meta_{id}')               │
+│    - Messages → makeAction('message') dans useSocket.ts                    │
+│    - Réactions/typing → makeAction('reaction') / makeAction('typing')      │
+│                                                                             │
+│ PATTERN STANDARD localStore :                                               │
+│   // Lire                                                                   │
+│   const data = await readLocal<MyType>('file.json') || {}                  │
+│   // Écrire                                                                 │
+│   await writeLocal('file.json', { ...data, [key]: value })                 │
+│                                                                             │
+│ POURQUOI :                                                                  │
+│   GunDB avec peers:[] ne se synchronise PAS cross-machine pour les données  │
+│   persistantes → tout ce qui est écrit dans GunDB hors messages est PERDU  │
+│   au redémarrage ou sur une autre machine. localStore = AppData/JSON =      │
+│   seule source de vérité fiable sur la machine locale.                     │
+│                                                                             │
+│ MIGRATION : Quand tu modifies un hook, remplace :                          │
+│   gun.get('X').get(id).put(data)   →   writeLocal('X.json', data)         │
+│   gun.get('X').get(id).on(cb)      →   readLocal('X.json') au montage     │
+│   gun.get('X').get(id).once(cb)    →   readLocal('X.json') au montage     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─ GUNDB PATHS (référence historique — messages uniquement désormais) ────────┐
+│                                                                             │
+│ Messages:    messages.{serverId}_{channelId}.{msgId}     ← ACTIF           │
+│ Réactions:   reactions.{serverId}_{channelId}.{msgId}.{emoji}.{user} ← ACTIF│
+│ UserIndex:   userIndex.{username_lowercase} ({exists, username, createdAt}) │
+│ Serveurs:    servers.{serverId}  ← uniquement pour joinServer() cross-machine│
+│ Invites:     invites.{code}      ← cross-machine seulement                 │
+│                                                                             │
+│ OBSOLÈTES (migrés vers localStore) :                                       │
+│ Profils / Membres / Channels / Roles / Bots / AutoMod / Webhooks / Perms   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 

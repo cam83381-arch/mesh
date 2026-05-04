@@ -1,16 +1,17 @@
 /**
- * useStream.ts -- Voix, caméra et partage d'écran -- 100% P2P
+ * useStream.ts -- Voix, camera et partage d'ecran -- 100% P2P
  *
- * Signaling WebRTC via GunDB :
+ * Signaling WebRTC via GunDB (exception autorisee) :
  *   gun.get('webrtc_signal').get(targetUserId).get(signalId)
  *
- * Présence vocale/stream via GunDB :
- *   gun.get('voice_presence').get(channelId).get(username) -> { active, ts }
+ * Presence vocale via Trystero makeAction('voice_presence') :
+ *   Remplace gun.get('voice_presence') qui ne se synchronise pas cross-machine
+ *   car GunDB a peers:[] (cache local uniquement)
  *
  * Reconnexion automatique :
- *   - onconnectionstatechange détecte 'failed' / 'disconnected'
- *   - backoff exponentiel : 1s → 2s → 4s → 8s (max 8s)
- *   - abandonné si leaveVoice() est appelé entre-temps
+ *   - onconnectionstatechange detecte 'failed' / 'disconnected'
+ *   - backoff exponentiel : 1s -> 2s -> 4s -> 8s (max 8s)
+ *   - abandonne si leaveVoice() est appele entre-temps
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -25,6 +26,9 @@ const STUN_SERVERS = [
 ]
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000]
+
+// Duree max d'un signal WebRTC avant purge (60s)
+const SIGNAL_MAX_AGE_MS = 60_000
 
 function useStream(username: string, voiceSettings?: {
   micDeviceId?: string
@@ -56,11 +60,14 @@ function useStream(username: string, voiceSettings?: {
   const isDeafenedRef = useRef(false)
   const isStreamingRef = useRef(false)
 
+  // Fonctions Trystero pour presence vocale (initialisees dans joinVoice)
+  const sendVoicePresenceFn = useRef<((p: object) => void) | null>(null)
+
   // Compteurs de tentatives de reconnexion par peer
   const reconnectAttempts = useRef<Record<string, number>>({})
   const reconnectTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
-  // ── Signal WebRTC via GunDB ──────────────────────────────────────
+  // ── Signal WebRTC via GunDB (autorise : cross-machine signaling) ─
   const sendSignal = (targetId: string, payload: object) => {
     const signalId = `${username}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     gun.get('webrtc_signal').get(targetId).get(signalId).put({
@@ -70,15 +77,25 @@ function useStream(username: string, voiceSettings?: {
     })
   }
 
+  // ── Purge des signaux WebRTC orphelins au demarrage ──────────────
+  useEffect(() => {
+    if (!username) return
+    const now = Date.now()
+    gun.get('webrtc_signal').get(username).map().once((data: any, signalId: string) => {
+      if (!data || !signalId) return
+      if (now - (data.ts || 0) > SIGNAL_MAX_AGE_MS) {
+        gun.get('webrtc_signal').get(username).get(signalId).put(null)
+      }
+    })
+  }, [username])
+
   // ── Reconnexion avec backoff exponentiel ─────────────────────────
   const scheduleReconnect = (peerId: string) => {
-    // Si on n'est plus dans un channel vocal, on abandonne
     if (!currentVoiceRoom.current) return
 
     const attempts = reconnectAttempts.current[peerId] ?? 0
     if (attempts >= RECONNECT_DELAYS.length) {
-      // Trop de tentatives — on considère le pair comme parti
-      console.warn(`[Mesh Voice] Pair ${peerId} injoignable après ${attempts} tentatives`)
+      console.warn(`[Mesh Voice] Pair ${peerId} injoignable apres ${attempts} tentatives`)
       setVoiceUsers(prev => prev.filter(u => u.id !== peerId))
       delete reconnectAttempts.current[peerId]
       return
@@ -88,7 +105,7 @@ function useStream(username: string, voiceSettings?: {
     console.log(`[Mesh Voice] Reconnexion vers ${peerId} dans ${delay}ms (tentative ${attempts + 1})`)
 
     reconnectTimers.current[peerId] = setTimeout(async () => {
-      if (!currentVoiceRoom.current) return // leaveVoice() appelé entre-temps
+      if (!currentVoiceRoom.current) return
       reconnectAttempts.current[peerId] = attempts + 1
 
       try {
@@ -97,7 +114,7 @@ function useStream(username: string, voiceSettings?: {
         await peer.setLocalDescription(offer)
         sendSignal(peerId, { type: 'offer_voice', sdp: offer.sdp })
       } catch (e) {
-        console.error(`[Mesh Voice] Échec reconnexion ${peerId}:`, e)
+        console.error(`[Mesh Voice] Echec reconnexion ${peerId}:`, e)
         scheduleReconnect(peerId)
       }
     }, delay)
@@ -111,9 +128,8 @@ function useStream(username: string, voiceSettings?: {
     delete reconnectAttempts.current[peerId]
   }
 
-  // ── Création d'un peer WebRTC vocal ──────────────────────────────
+  // ── Creation d'un peer WebRTC vocal ──────────────────────────────
   const createVoicePeer = (peerId: string) => {
-    // Fermer proprement l'ancienne connexion si elle existe
     if (voicePeers.current[peerId]) {
       voicePeers.current[peerId].onconnectionstatechange = null
       voicePeers.current[peerId].close()
@@ -123,14 +139,12 @@ function useStream(username: string, voiceSettings?: {
     const peer = new RTCPeerConnection({ iceServers: STUN_SERVERS })
     voicePeers.current[peerId] = peer
 
-    // Ajouter le micro local si disponible
     if (localAudioStream.current) {
       localAudioStream.current.getAudioTracks().forEach(track => {
         peer.addTrack(track, localAudioStream.current!)
       })
     }
 
-    // Réception audio distant
     peer.ontrack = (e) => {
       if (isDeafenedRef.current) return
       let audio = remoteAudios.current[peerId]
@@ -144,31 +158,26 @@ function useStream(username: string, voiceSettings?: {
       audio.play().catch(() => {})
     }
 
-    // ICE candidates
     peer.onicecandidate = (e) => {
       if (e.candidate) {
         sendSignal(peerId, { type: 'ice_voice', candidate: e.candidate.toJSON() })
       }
     }
 
-    // Reconnexion automatique sur déconnexion/échec
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState
-      console.log(`[Mesh Voice] ${peerId} → ${state}`)
+      console.log(`[Mesh Voice] ${peerId} -> ${state}`)
 
       if (state === 'connected') {
-        // Connexion établie : réinitialiser le compteur de tentatives
         cancelReconnect(peerId)
         reconnectAttempts.current[peerId] = 0
       } else if (state === 'failed' || state === 'disconnected') {
-        // Nettoyer l'audio distant
         if (remoteAudios.current[peerId]) {
           remoteAudios.current[peerId].srcObject = null
           delete remoteAudios.current[peerId]
         }
         peer.close()
         delete voicePeers.current[peerId]
-        // Tenter la reconnexion si on est encore dans le channel
         scheduleReconnect(peerId)
       } else if (state === 'closed') {
         cancelReconnect(peerId)
@@ -178,7 +187,7 @@ function useStream(username: string, voiceSettings?: {
     return peer
   }
 
-  // ── Écoute des signaux entrants ──────────────────────────────────
+  // ── Ecoute des signaux WebRTC entrants (GunDB) ───────────────────
   useEffect(() => {
     if (!username) return
 
@@ -195,13 +204,11 @@ function useStream(username: string, voiceSettings?: {
 
       try {
         if (data.type === 'offer_voice') {
-          // Un pair nous envoie une offre — on répond
           const peer = createVoicePeer(fromId)
           await peer.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }))
           const answer = await peer.createAnswer()
           await peer.setLocalDescription(answer)
           sendSignal(fromId, { type: 'answer_voice', sdp: answer.sdp })
-          // Connexion entrante réussie : reset tentatives
           reconnectAttempts.current[fromId] = 0
 
         } else if (data.type === 'answer_voice') {
@@ -265,7 +272,6 @@ function useStream(username: string, voiceSettings?: {
         console.error('[Mesh Voice] Erreur traitement signal:', err)
       }
 
-      // Nettoyer le signal après traitement
       setTimeout(() => {
         mySignals.get(signalId).put(null)
         processedSignals.delete(signalId)
@@ -277,7 +283,7 @@ function useStream(username: string, voiceSettings?: {
     }
   }, [username])
 
-  // ── Présence stream (partage d'écran) ────────────────────────────
+  // ── Presence stream partage d'ecran (GunDB radisk local OK) ──────
   useEffect(() => {
     const streamPresence = gun.get('stream_presence')
     streamPresence.map().on((data: any, user: string) => {
@@ -302,7 +308,7 @@ function useStream(username: string, voiceSettings?: {
     }
   }, [username])
 
-  // ── Partage d'écran ──────────────────────────────────────────────
+  // ── Partage d'ecran ──────────────────────────────────────────────
   const startStream = async (constraints: StreamConstraints) => {
     try {
       let stream: MediaStream
@@ -342,8 +348,8 @@ function useStream(username: string, voiceSettings?: {
       setIsStreaming(true)
       stream.getVideoTracks()[0].addEventListener('ended', () => stopStream())
     } catch (e) {
-      console.error('[Mesh] Erreur capture écran:', e)
-      alert("Impossible de capturer l'écran. Vérifie les permissions.")
+      console.error('[Mesh] Erreur capture ecran:', e)
+      alert("Impossible de capturer l'ecran. Verifie les permissions.")
     }
   }
 
@@ -370,7 +376,7 @@ function useStream(username: string, voiceSettings?: {
     setWatchingStream(null)
   }
 
-  // ── Caméra ───────────────────────────────────────────────────────
+  // ── Camera ───────────────────────────────────────────────────────
   const toggleCamera = async () => {
     if (isCameraOn) {
       if (cameraStream.current) {
@@ -389,7 +395,7 @@ function useStream(username: string, voiceSettings?: {
         }
         setIsCameraOn(true)
       } catch {
-        alert("Impossible d'accéder à la caméra !")
+        alert("Impossible d'acceder a la camera !")
       }
     }
   }
@@ -400,9 +406,45 @@ function useStream(username: string, voiceSettings?: {
     setVoiceFull(false)
     setVoiceUsers([{ id: username, username }])
 
-    joinMeshRoom(`voice_${channelId}`)
+    // Rejoindre la room Trystero pour la presence vocale
+    const voiceRoom = joinMeshRoom(`voice_${channelId}`)
 
-    // MICRO EN PREMIER — createVoicePeer() appelle addTrack() sur localAudioStream
+    if (voiceRoom) {
+      const [sendPresence, getPresence] = (voiceRoom.makeAction as any)('voice_presence') as [any, any]
+      sendVoicePresenceFn.current = sendPresence
+
+      // Ecouter la presence des autres
+      getPresence((data: any) => {
+        if (!data?.user || data.user === username) return
+        if (data.active) {
+          setVoiceUsers(prev => prev.find(u => u.id === data.user) ? prev : [...prev, { id: data.user, username: data.user }])
+          // Initier connexion WebRTC si pas deja connecte
+          if (!voicePeers.current[data.user]) {
+            createVoicePeer(data.user)
+              .createOffer()
+              .then(async offer => {
+                await voicePeers.current[data.user]?.setLocalDescription(offer)
+                sendSignal(data.user, { type: 'offer_voice', sdp: offer.sdp })
+              })
+              .catch(e => console.error('[Mesh Voice] Erreur offre initiale:', e))
+          }
+        } else {
+          cancelReconnect(data.user)
+          setVoiceUsers(prev => prev.filter(u => u.id !== data.user))
+          if (voicePeers.current[data.user]) {
+            voicePeers.current[data.user].onconnectionstatechange = null
+            voicePeers.current[data.user].close()
+            delete voicePeers.current[data.user]
+          }
+          if (remoteAudios.current[data.user]) {
+            remoteAudios.current[data.user].srcObject = null
+            delete remoteAudios.current[data.user]
+          }
+        }
+      })
+    }
+
+    // MICRO
     try {
       const audioConstraints: MediaTrackConstraints = voiceSettings?.micDeviceId
         ? { deviceId: { exact: voiceSettings.micDeviceId } }
@@ -414,46 +456,13 @@ function useStream(username: string, voiceSettings?: {
       console.warn('[Mesh Voice] Pas de micro disponible:', e)
     }
 
-    // Publier notre présence puis écouter les autres
-    gun.get('voice_presence').get(channelId).get(username).put({ active: true, ts: Date.now() })
+    // Annoncer notre presence via Trystero
+    sendVoicePresenceFn.current?.({ user: username, active: true })
 
-    gun.get('voice_presence').get(channelId).map().on(async (data: any, user: string) => {
-      if (!user || user === username) return
-      const isActive = data && data.active === true && (Date.now() - (data.ts || 0)) < 15000
-
-      if (isActive) {
-        setVoiceUsers(prev => prev.find(u => u.id === user) ? prev : [...prev, { id: user, username: user }])
-        // Initier la connexion seulement si pas déjà connecté
-        if (!voicePeers.current[user]) {
-          try {
-            const peer = createVoicePeer(user)
-            const offer = await peer.createOffer()
-            await peer.setLocalDescription(offer)
-            sendSignal(user, { type: 'offer_voice', sdp: offer.sdp })
-          } catch (e) {
-            console.error('[Mesh Voice] Erreur offre initiale:', e)
-          }
-        }
-      } else {
-        // Pair parti proprement (active: false) — annuler tout retry en cours
-        cancelReconnect(user)
-        setVoiceUsers(prev => prev.filter(u => u.id !== user))
-        if (voicePeers.current[user]) {
-          voicePeers.current[user].onconnectionstatechange = null
-          voicePeers.current[user].close()
-          delete voicePeers.current[user]
-        }
-        if (remoteAudios.current[user]) {
-          remoteAudios.current[user].srcObject = null
-          delete remoteAudios.current[user]
-        }
-      }
-    })
-
-    // Heartbeat de présence toutes les 5s
+    // Heartbeat de presence toutes les 5s via Trystero
     const hb = setInterval(() => {
       if (currentVoiceRoom.current === channelId) {
-        gun.get('voice_presence').get(channelId).get(username).put({ active: true, ts: Date.now() })
+        sendVoicePresenceFn.current?.({ user: username, active: true })
       } else {
         clearInterval(hb)
       }
@@ -465,12 +474,12 @@ function useStream(username: string, voiceSettings?: {
   const leaveVoice = (channelId?: string) => {
     const room = channelId || currentVoiceRoom.current
 
-    // Annuler tous les timers de reconnexion avant de fermer
     Object.keys(reconnectTimers.current).forEach(cancelReconnect)
 
     if (room) {
-      gun.get('voice_presence').get(room).get(username).put({ active: false, ts: Date.now() })
-      gun.get('voice_presence').get(room).map().off()
+      // Annoncer depart via Trystero
+      sendVoicePresenceFn.current?.({ user: username, active: false })
+      sendVoicePresenceFn.current = null
       leaveMeshRoom(`voice_${room}`)
       const hbKey = `_vhb_${room}`
       if ((window as any)[hbKey]) {

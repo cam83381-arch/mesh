@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import type { Member, CustomRole, UserProfile } from '../types'
 import type { Friendship } from '../useFriends'
-import gun from '../gun'
+import { readLocal } from '../localStore'
+import { onPeerProfile } from '../mesh'
 
 const STATUS_LABELS: Record<string, string> = {
   online: 'En ligne',
@@ -62,65 +63,51 @@ function MemberTooltip({ username, currentUsername, members, customRoles, friend
 
   useEffect(() => {
     if (!username) return
-    const ref = gun.get('profiles').get(username)
     let mounted = true
 
-    // Fonction de chargement complet du profil
-    const loadFull = () => {
-      ref.once((p: any) => {
-        if (!mounted || !p) return
-        setProfile({
-          username:         p.username         || username,
-          status:           p.status           || 'online',
-          customStatus:     p.customStatus      || '',
-          avatarColor:      p.avatarColor       || '#6354ff',
-          displayName:      p.displayName       || '',
-          bio:              p.bio               || '',
-          bannerColor:      p.bannerColor       || '',
-          avatarDecoration: p.avatarDecoration  || undefined,
-          profileEffect:    p.profileEffect     || undefined,
-          avatarImage:      p.avatarImage       || undefined,
-          bannerImage:      p.bannerImage       || undefined,
-        })
+    // Charger depuis localStore (profiles.json)
+    const loadProfile = async () => {
+      const profiles = await readLocal<Record<string, any>>('profiles.json') || {}
+      const p = profiles[username]
+      if (!mounted || !p) return
+      setProfile({
+        username:         p.username         || username,
+        status:           p.status           || 'online',
+        customStatus:     p.customStatus      || '',
+        avatarColor:      p.avatarColor       || '#6354ff',
+        displayName:      p.displayName       || '',
+        bio:              p.bio               || '',
+        bannerColor:      p.bannerColor       || '',
+        avatarDecoration: p.avatarDecoration  || undefined,
+        profileEffect:    p.profileEffect     || undefined,
+        avatarImage:      p.avatarImage       || undefined,
+        bannerImage:      p.bannerImage       || undefined,
       })
     }
 
-    // Chargement initial
-    loadFull()
+    loadProfile()
 
-    // Écoute champ par champ pour les changements légers (statut, couleur…)
-    const FIELDS = ['avatarColor', 'displayName', 'bio', 'bannerColor', 'status',
-                    'customStatus', 'avatarDecoration', 'profileEffect', 'avatarImage', 'bannerImage'] as const
-    type Field = typeof FIELDS[number]
-    const callbacks: Partial<Record<Field, (val: any) => void>> = {}
-
-    FIELDS.forEach(field => {
-      const cb = (val: any) => {
-        if (!mounted) return
-        setProfile(prev => {
-          if (!prev) return prev
-          return { ...prev, [field]: (val !== undefined && val !== null) ? val : undefined }
-        })
-      }
-      callbacks[field] = cb
-      ref.get(field).on(cb)
+    // Écouter les mises à jour de profil en temps réel via Trystero
+    const unsubscribe = onPeerProfile((_peerId, p) => {
+      if (!mounted || p.username !== username) return
+      setProfile({
+        username:         p.username         || username,
+        status:           p.status           || 'online',
+        customStatus:     p.customStatus      || '',
+        avatarColor:      p.avatarColor       || '#6354ff',
+        displayName:      p.displayName       || '',
+        bio:              p.bio               || '',
+        bannerColor:      p.bannerColor       || '',
+        avatarDecoration: p.avatarDecoration  || undefined,
+        profileEffect:    p.profileEffect     || undefined,
+        avatarImage:      p.avatarImage       || undefined,
+        bannerImage:      p.bannerImage       || undefined,
+      })
     })
-
-    // Écouter updatedAt — quand il change, recharger tout le profil d'un coup
-    // (garantit la synchro des photos même si les listeners individuels sont lents)
-    const updatedAtCb = (_val: any) => {
-      if (!mounted) return
-      loadFull()
-    }
-    ref.get('updatedAt').on(updatedAtCb)
 
     return () => {
       mounted = false
-      FIELDS.forEach(field => {
-        const cb = callbacks[field]
-        if (cb) ref.get(field).off(cb)
-      })
-      ref.get('updatedAt').off(updatedAtCb)
+      unsubscribe()
     }
   }, [username])
 

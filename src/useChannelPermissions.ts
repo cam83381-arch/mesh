@@ -2,7 +2,7 @@
  * useChannelPermissions
  *
  * Gère les overrides de permission par salon.
- * Stocké dans GunDB : channel_perms.{serverId}.{channelId}.{overrideId}
+ * Stocké dans localStore : channel_perms.json → {serverId: {channelId: ChannelPermOverride[]}}
  *
  * Résolution des permissions (priorité décroissante) :
  *   1. Override utilisateur (deny > allow)
@@ -12,8 +12,8 @@
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { ChannelPermOverride, CustomRole, Member, Role } from './types'
-import { DEFAULT_PERMISSIONS } from './types'
-import gun from './gun'
+import { readLocal, writeLocal } from './localStore'
+import { joinMeshRoom } from './mesh'
 
 export interface ResolvedChannelPerms {
   canRead: boolean
@@ -21,47 +21,85 @@ export interface ResolvedChannelPerms {
   canManage: boolean
 }
 
+const PERMS_FILE = 'channel_perms.json'
+
+type PermsData = Record<string, Record<string, ChannelPermOverride[]>>
+
+async function loadOverrides(serverId: string, channelId: string): Promise<ChannelPermOverride[]> {
+  const data = await readLocal<PermsData>(PERMS_FILE) || {}
+  return data[serverId]?.[channelId] || []
+}
+
+async function saveOverrides(serverId: string, channelId: string, overrides: ChannelPermOverride[]) {
+  const data = await readLocal<PermsData>(PERMS_FILE) || {}
+  if (!data[serverId]) data[serverId] = {}
+  data[serverId][channelId] = overrides
+  await writeLocal(PERMS_FILE, data)
+}
+
 // ── Hook principal ─────────────────────────────────────────────────
 function useChannelPermissions(serverId: string, channelId: string) {
   const [overrides, setOverrides] = useState<ChannelPermOverride[]>([])
-  // useRef pour que la map survive aux re-renders sans se réinitialiser
-  const overridesRef = useRef<Record<string, ChannelPermOverride>>({})
+  const overridesRef = useRef<ChannelPermOverride[]>([])
 
   useEffect(() => {
-    overridesRef.current = {} // reset propre au changement de salon/serveur
+    overridesRef.current = []
+    setOverrides([])
     if (!serverId || !channelId) return
-    const g = gun
-    g.get('channel_perms').get(serverId).get(channelId).map().on((data: any, id: string) => {
-      if (!data || !data.targetId) {
-        delete overridesRef.current[id]
-      } else {
-        overridesRef.current[id] = {
-          targetId: data.targetId,
-          targetType: data.targetType,
-          allow: JSON.parse(data.allow || '{}'),
-          deny: JSON.parse(data.deny || '{}'),
-        }
-      }
-      setOverrides(Object.values(overridesRef.current))
-    })
-  }, [serverId, channelId]) // eslint-disable-line react-hooks/exhaustive-deps
+    let active = true
 
-  const setOverride = useCallback((override: ChannelPermOverride) => {
-    if (!serverId || !channelId) return
-    const id = `${override.targetType}_${override.targetId}`
-    const g = gun
-    g.get('channel_perms').get(serverId).get(channelId).get(id).put({
-      targetId: override.targetId,
-      targetType: override.targetType,
-      allow: JSON.stringify(override.allow),
-      deny: JSON.stringify(override.deny),
+    loadOverrides(serverId, channelId).then(loaded => {
+      if (!active) return
+      overridesRef.current = loaded
+      setOverrides(loaded)
     })
+
+    // Écouter les mises à jour des permissions via P2P
+    const room = joinMeshRoom(`perms_${serverId}`)
+    if (room) {
+      const [, getPermsUpdate] = (room.makeAction as any)('perms_update') as [any, any]
+      getPermsUpdate(async (data: any) => {
+        if (!active || data?.channelId !== channelId) return
+        const loaded = await loadOverrides(serverId, channelId)
+        overridesRef.current = loaded
+        setOverrides(loaded)
+      })
+    }
+
+    return () => { active = false }
   }, [serverId, channelId])
 
-  const removeOverride = useCallback((targetType: string, targetId: string) => {
+  const setOverride = useCallback(async (override: ChannelPermOverride) => {
     if (!serverId || !channelId) return
-    const id = `${targetType}_${targetId}`
-    gun.get('channel_perms').get(serverId).get(channelId).get(id).put(null)
+    const current = await loadOverrides(serverId, channelId)
+    const id = `${override.targetType}_${override.targetId}`
+    const idx = current.findIndex(o => `${o.targetType}_${o.targetId}` === id)
+    if (idx >= 0) current[idx] = override
+    else current.push(override)
+    await saveOverrides(serverId, channelId, current)
+    overridesRef.current = current
+    setOverrides(current)
+
+    const room = joinMeshRoom(`perms_${serverId}`)
+    if (room) {
+      const [sendPermsUpdate] = (room.makeAction as any)('perms_update') as [any, any]
+      try { sendPermsUpdate({ channelId }) } catch {}
+    }
+  }, [serverId, channelId])
+
+  const removeOverride = useCallback(async (targetType: string, targetId: string) => {
+    if (!serverId || !channelId) return
+    const current = await loadOverrides(serverId, channelId)
+    const updated = current.filter(o => !(o.targetType === targetType && o.targetId === targetId))
+    await saveOverrides(serverId, channelId, updated)
+    overridesRef.current = updated
+    setOverrides(updated)
+
+    const room = joinMeshRoom(`perms_${serverId}`)
+    if (room) {
+      const [sendPermsUpdate] = (room.makeAction as any)('perms_update') as [any, any]
+      try { sendPermsUpdate({ channelId }) } catch {}
+    }
   }, [serverId, channelId])
 
   return { overrides, setOverride, removeOverride }
@@ -73,43 +111,32 @@ export function resolveChannelPerms(
   member: Member | undefined,
   _customRoles: CustomRole[],
   overrides: ChannelPermOverride[],
+  serverRole: Role = 'member'
 ): ResolvedChannelPerms {
-  // Permissions globales de base (rôle système)
-  const sysRole: Role = member?.role || 'member'
-  const base = DEFAULT_PERMISSIONS[sysRole]
-
-  // Propriétaire → tout autorisé, aucun override possible
-  if (sysRole === 'owner') return { canRead: true, canWrite: true, canManage: true }
-  if (sysRole === 'banned') return { canRead: false, canWrite: false, canManage: false }
-
-  // Résolution initiale depuis permissions globales
-  let canRead = true   // par défaut tout le monde peut lire
-  let canWrite = base.canSendMessages
-  let canManage = base.canDeleteMessages
-
-  // Appliquer overrides de rôle
-  const roleId = member?.customRoleId
-  if (roleId) {
-    const roleOverride = overrides.find(o => o.targetType === 'role' && o.targetId === roleId)
-    if (roleOverride) {
-      if (roleOverride.deny.canRead === true) canRead = false
-      if (roleOverride.deny.canWrite === true) canWrite = false
-      if (roleOverride.deny.canManage === true) canManage = false
-      if (roleOverride.allow.canRead === true) canRead = true
-      if (roleOverride.allow.canWrite === true) canWrite = true
-      if (roleOverride.allow.canManage === true) canManage = true
-    }
+  // Owners et admins ont toujours accès
+  if (serverRole === 'owner' || serverRole === 'admin') {
+    return { canRead: true, canWrite: true, canManage: true }
+  }
+  if (serverRole === 'banned') {
+    return { canRead: false, canWrite: false, canManage: false }
   }
 
-  // Appliquer overrides utilisateur (priorité max)
-  const userOverride = overrides.find(o => o.targetType === 'user' && o.targetId === username)
-  if (userOverride) {
-    if (userOverride.deny.canRead === true) canRead = false
-    if (userOverride.deny.canWrite === true) canWrite = false
-    if (userOverride.deny.canManage === true) canManage = false
-    if (userOverride.allow.canRead === true) canRead = true
-    if (userOverride.allow.canWrite === true) canWrite = true
-    if (userOverride.allow.canManage === true) canManage = true
+  // Appliquer les overrides explicites (utilisateur ou rôle)
+  let canRead = true
+  let canWrite = true
+  let canManage = serverRole === 'moderator'
+
+  for (const override of overrides) {
+    const matchUser = override.targetType === 'user' && override.targetId === username
+    const matchRole = override.targetType === 'role' && override.targetId === (member?.customRoleId || '')
+    if (!matchUser && !matchRole) continue
+    // deny prend priorité sur allow
+    if (override.deny.canRead === true) canRead = false
+    else if (override.allow.canRead === true) canRead = true
+    if (override.deny.canWrite === true) canWrite = false
+    else if (override.allow.canWrite === true) canWrite = true
+    if (override.deny.canManage === true) canManage = false
+    else if (override.allow.canManage === true) canManage = true
   }
 
   return { canRead, canWrite, canManage }

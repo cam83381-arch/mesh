@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Friendship } from '../useFriends'
-import gun from '../gun'
+import { readLocal } from '../localStore'
+import { onPeerProfile } from '../mesh'
 
 const STATUS_COLORS: Record<string, string> = {
   online: '#23a559',
@@ -44,13 +45,24 @@ function FriendCard({
 
   useEffect(() => {
     if (!friendship.otherUser) return
-    gun.get('profiles').get(friendship.otherUser).on((p: any) => {
+    let active = true
+    // Load from disk initially
+    readLocal<Record<string, any>>('profiles.json').then(db => {
+      if (!active || !db) return
+      const p = db[friendship.otherUser]
       if (!p) return
       if (p.status) setStatus(p.status)
       if (p.avatarColor) setAvatarColor(p.avatarColor)
       if (p.customStatus !== undefined) setCustomStatus(p.customStatus || '')
     })
-    return () => { gun.get('profiles').get(friendship.otherUser).off() }
+    // Listen for live P2P profile updates
+    const unsub = onPeerProfile((_peerId, p) => {
+      if (!active || p?.username !== friendship.otherUser) return
+      if (p.status) setStatus(p.status)
+      if (p.avatarColor) setAvatarColor(p.avatarColor)
+      if (p.customStatus !== undefined) setCustomStatus(p.customStatus || '')
+    })
+    return () => { active = false; unsub() }
   }, [friendship.otherUser])
 
   const statusLabel = status === 'online' ? 'En ligne'
@@ -158,16 +170,22 @@ function FriendsPage({
 
   useEffect(() => {
     const all = [...friends, ...pendingIncoming, ...pendingSent]
-    const usernames = all.map(f => f.otherUser)
-    usernames.forEach(u => {
-      gun.get('profiles').get(u).on((p: any) => {
-        if (!p) return
-        setOnlineStatuses(prev => ({ ...prev, [u]: p.status || 'invisible' }))
-      })
+    const usernames = new Set(all.map(f => f.otherUser))
+    let active = true
+    // Load initial statuses from disk
+    readLocal<Record<string, any>>('profiles.json').then(db => {
+      if (!active || !db) return
+      const updates: Record<string, string> = {}
+      usernames.forEach(u => { if (db[u]?.status) updates[u] = db[u].status })
+      if (Object.keys(updates).length > 0) setOnlineStatuses(prev => ({ ...prev, ...updates }))
     })
-    return () => {
-      usernames.forEach(u => gun.get('profiles').get(u).off())
-    }
+    // Listen for live P2P profile updates
+    const unsub = onPeerProfile((_peerId, p) => {
+      if (!active || !p?.username || !usernames.has(p.username)) return
+      setOnlineStatuses(prev => ({ ...prev, [p.username]: p.status || 'invisible' }))
+    })
+    return () => { active = false; unsub() }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [friends.map(f => f.otherUser).join(','), pendingIncoming.length, pendingSent.length])
 
   const onlineFriends = friends.filter(f => {
@@ -187,20 +205,8 @@ function FriendsPage({
     setAddFriendMsg('')
     setAddFriendLoading(true)
 
-    const exists = await new Promise<boolean>((resolve) => {
-      const tid = setTimeout(() => resolve(false), 4000)
-      gun.get('userIndex').get(target.toLowerCase()).once((data: any) => {
-        clearTimeout(tid)
-        resolve(!!(data && data.exists))
-      })
-    })
-
-    if (!exists) {
-      setAddFriendError(`Aucun utilisateur trouvé avec le pseudo « ${target} ». Vérifie l'orthographe.`)
-      setAddFriendLoading(false)
-      return
-    }
-
+    // En P2P pur, on ne peut pas vérifier si un utilisateur existe globalement
+    // On envoie directement la demande — si le pair n'existe pas, il ne répondra pas
     onSendFriendRequest(target)
     setAddFriendMsg(`Demande d'ami envoyée à ${target} !`)
     setAddFriendInput('')
