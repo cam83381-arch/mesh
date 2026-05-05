@@ -214,34 +214,3 @@ function useServers(username: string) {
 }
 
 export default useServers
-ring, name: string) => {
-    const label = name.slice(0, 2).toUpperCase()
-    gun.get('servers').get(id).get('name').put(name)
-    gun.get('servers').get(id).get('label').put(label)
-    const all = await loadAllServers()
-    if (all[id]) { all[id] = { ...all[id], name, label }; await writeLocal(SERVERS_FILE, all) }
-    setServers(prev => prev.map(s => s.id === id ? { ...s, name, label } : s))
-  }, [])
-
-  const deleteServer = useCallback(async (id: string) => {
-    const ids = await loadUserServerIds(username)
-    await saveUserServerIds(username, ids.filter(i => i !== id))
-    await removeServerFromFile(id)
-    gun.get('userServers').get(username).get(id).put(null)
-    gun.get('servers').get(id).once((server: Server) => {
-      if (server?.ownerId === username) gun.get('servers').get(id).put(null)
-    })
-    setServers(prev => prev.filter(s => s.id !== id))
-  }, [username])
-
-  const leaveServer = useCallback(async (id: string) => {
-    const ids = await loadUserServerIds(username)
-    await saveUserServerIds(username, ids.filter(i => i !== id))
-    gun.get('userServers').get(username).get(id).put(null)
-    setServers(prev => prev.filter(s => s.id !== id))
-  }, [username])
-
-  return { servers, loading: false, createServer, joinServer, joinByInvite, updateServer, deleteServer, leaveServer }
-}
-
-export default useServers
