@@ -23,6 +23,10 @@ import {
 export { selfId }
 
 const RELAY_URLS = [
+  // Tracker Mesh auto-hébergé (prioritaire) — se rendort après 15min d'inactivité,
+  // Trystero bascule automatiquement sur les trackers publics ci-dessous en fallback.
+  'wss://mesh-tracker.onrender.com',
+  // Trackers publics de secours
   'wss://tracker.openwebtorrent.com',
   'wss://tracker.webtorrent.dev',
   'wss://tracker.btorrent.xyz',
