@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { peerProfiles, onPeerProfile, onConnectionChange, forceReconnect } from '../mesh'
 
 declare global {
   interface Window {
@@ -22,6 +23,36 @@ interface TitleBarProps {
 
 const TitleBar: React.FC<TitleBarProps> = ({ onDeepLink }) => {
   const [updateReady, setUpdateReady] = useState(false)
+  const [peerCount, setPeerCount] = useState(() => Object.keys(peerProfiles).length)
+  const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine)
+  const [reconnecting, setReconnecting] = useState(false)
+
+  // Écoute les arrivées/départs de pairs P2P pour mettre à jour le compteur
+  useEffect(() => {
+    const unsub = onPeerProfile(() => {
+      setPeerCount(Object.keys(peerProfiles).length)
+    })
+    return unsub
+  }, [])
+
+  // Écoute l'état de connexion P2P (online/offline/reconnecting)
+  useEffect(() => {
+    const unsub = onConnectionChange((online: boolean) => {
+      setNetworkOnline(online)
+      setReconnecting(!online)
+      if (online) setPeerCount(Object.keys(peerProfiles).length)
+    })
+    // Écoute aussi l'état OS directement
+    const handleOnline = () => setNetworkOnline(true)
+    const handleOffline = () => { setNetworkOnline(false); setReconnecting(true) }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      unsub()
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   useEffect(() => {
     if (!window.electron) return
@@ -84,6 +115,24 @@ const TitleBar: React.FC<TitleBarProps> = ({ onDeepLink }) => {
               <line x1="29" y1="9"  x2="7"  y2="27" stroke="url(#tb-g2)" strokeWidth="0.6" opacity="0.18"/>
             </svg>
             <span className="titlebar-title">Mesh</span>
+          </div>
+
+          {/* Indicateur peers P2P */}
+          <div
+            className={`titlebar-peer-indicator${!networkOnline ? ' offline' : reconnecting ? ' reconnecting' : peerCount > 0 ? ' connected' : ''}`}
+            title={
+              !networkOnline ? 'Réseau indisponible — cliquer pour réessayer' :
+              reconnecting ? 'Reconnexion en cours…' :
+              peerCount > 0 ? `${peerCount} pair${peerCount > 1 ? 's' : ''} P2P connecté${peerCount > 1 ? 's' : ''}` :
+              'Aucun pair P2P connecté — cliquer pour reconnecter'
+            }
+            onClick={() => { if (!reconnecting) { setReconnecting(true); forceReconnect() } }}
+            style={{ cursor: reconnecting ? 'default' : 'pointer' }}
+          >
+            <span className="peer-dot" />
+            <span className="peer-count">
+              {!networkOnline ? '✕' : reconnecting ? '…' : peerCount > 0 ? peerCount : '–'}
+            </span>
           </div>
         </div>
         <div className="titlebar-controls">

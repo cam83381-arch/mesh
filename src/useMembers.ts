@@ -36,7 +36,7 @@ function useMembers(serverId: string, username: string) {
 
     if (room) {
       const [sendPresence, getPresence] = (room.makeAction as any)('member_join') as [any, any]
-      sendPresenceRef.current = (m: Member) => { try { sendPresence(m) } catch {} }
+      sendPresenceRef.current = (m: Member) => { try { sendPresence(m) } catch (_e) {} }
 
       // Recevoir la présence d'un pair → écrire dans GunDB local
       getPresence((member: any) => {
@@ -52,7 +52,7 @@ function useMembers(serverId: string, username: string) {
         if (!active) return
         // Broadcaster tous les membres qu'on connaît pour que le pair ait la liste complète
         Object.values(membersRef).forEach(m => {
-          try { sendPresence(m) } catch {}
+          try { sendPresence(m) } catch (_e) {}
         })
       })
     }
@@ -136,9 +136,9 @@ function useMembers(serverId: string, username: string) {
     return () => {
       active = false
       sendPresenceRef.current = null
-      try { gun.get('members').get(serverId).map().off() } catch {}
-      try { gun.get('kicked').get(serverId).get(username).off() } catch {}
-      try { gun.get('tempbans').get(serverId).get(username).off() } catch {}
+      try { gun.get('members').get(serverId).map().off() } catch (_e) {}
+      try { gun.get('kicked').get(serverId).get(username).off() } catch (_e) {}
+      try { gun.get('tempbans').get(serverId).get(username).off() } catch (_e) {}
     }
   }, [serverId, username])
 
@@ -163,7 +163,12 @@ function useMembers(serverId: string, username: string) {
     return members.find(m => m.username === targetUsername)?.role || 'member'
   }, [members])
 
-  return { members, isKicked, updateRole, kickMember, getMemberRole, assignCustomRole }
+  const applyTempban = useCallback((targetUsername: string, durationMs: number) => {
+    const bannedUntil = Date.now() + durationMs
+    gun.get('tempbans').get(serverId).get(targetUsername).put({ bannedUntil })
+  }, [serverId])
+
+  return { members, isKicked, updateRole, kickMember, getMemberRole, assignCustomRole, applyTempban }
 }
 
 export default useMembers

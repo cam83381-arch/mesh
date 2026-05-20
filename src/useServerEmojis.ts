@@ -70,7 +70,7 @@ function useServerEmojis(serverId: string, username: string) {
       room.onPeerJoin(async () => {
         const data = await loadEmojis(serverId)
         Object.values(data).forEach(e => {
-          try { sendEmoji(e) } catch {}
+          try { sendEmoji(e) } catch (_e) {}
         })
       })
     }
@@ -99,7 +99,7 @@ function useServerEmojis(serverId: string, username: string) {
     emojisRef.current[id] = emoji
     await saveEmojis(serverId, emojisRef.current)
     setEmojis(sortEmojis(emojisRef.current))
-    try { sendEmojiFn.current?.(emoji) } catch {}
+    try { sendEmojiFn.current?.(emoji) } catch (_e) {}
     return true
   }
 
@@ -110,7 +110,7 @@ function useServerEmojis(serverId: string, username: string) {
     await saveEmojis(serverId, emojisRef.current)
     setEmojis(sortEmojis(emojisRef.current))
     if (deleted) {
-      try { sendEmojiFn.current?.({ ...deleted, _deleted: true }) } catch {}
+      try { sendEmojiFn.current?.({ ...deleted, _deleted: true }) } catch (_e) {}
     }
   }
 

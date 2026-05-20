@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import Gun from 'gun'
-import 'gun/sea'
 import type { UserProfile } from '../types'
 import type { AppSettings } from '../useSettings'
 import { AVATAR_DECORATIONS, PROFILE_EFFECTS } from './MemberTooltip'
@@ -9,7 +7,18 @@ import ImageCropper from './ImageCropper'
 
 import { readLocal, writeLocal } from '../localStore'
 
-const sea = (Gun as any).SEA
+// Hash mot de passe via Web Crypto API (PBKDF2) -- sans dependance Gun/SEA
+async function hashPassword(password: string, salt: string): Promise<string> {
+  const enc = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']
+  )
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, 256
+  )
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
 
 // ── Constantes ──
 const AVATAR_COLORS = ['#5865f2', '#23a559', '#f0b232', '#f23f43', '#f47fff', '#00b0f4', '#eb459e', '#faa61a']
@@ -68,7 +77,7 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
 
   // ── Avancés : URL serveur custom ──
   const [customServerUrl, setCustomServerUrl] = useState(() => {
-    try { return localStorage.getItem('mesh_server_url') || '' } catch { return '' }
+    try { return localStorage.getItem('mesh_server_url') || '' } catch (_e) { return '' }
   })
   const [serverUrlSaved, setServerUrlSaved] = useState(false)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -192,10 +201,10 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
     const users = await readLocal<Record<string, any>>('users.json') || {}
     const user = users[username]
     if (!user) { setPwdMsg({ text: 'Utilisateur introuvable.', ok: false }); return }
-    const oldHash = await sea.work(oldPwd, username)
-    if (oldHash !== user.password) { setPwdMsg({ text: 'Ancien mot de passe incorrect.', ok: false }); return }
-    const newHash = await sea.work(newPwd, username)
-    users[username] = { ...user, password: newHash }
+    const oldHash = await hashPassword(oldPwd, username.toLowerCase())
+    if (oldHash !== user.passwordHash && oldHash !== user.password) { setPwdMsg({ text: 'Ancien mot de passe incorrect.', ok: false }); return }
+    const newHash = await hashPassword(newPwd, username.toLowerCase())
+    users[username.toLowerCase()] = { ...user, passwordHash: newHash }
     await writeLocal('users.json', users)
     setPwdMsg({ text: 'Mot de passe modifié avec succès !', ok: true })
     setOldPwd(''); setNewPwd(''); setConfirmPwd('')
@@ -229,7 +238,7 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
       const devices = await navigator.mediaDevices.enumerateDevices()
       setAudioInputs(devices.filter(d => d.kind === 'audioinput'))
       setVideoInputs(devices.filter(d => d.kind === 'videoinput'))
-    } catch {
+    } catch (_e) {
       alert('Impossible d\'accéder au microphone.')
     }
   }, [selectedMic])
@@ -732,7 +741,7 @@ function UserSettings({ username, profile, settings, onUpdateSettings, onSavePro
                 className="us-btn primary"
                 style={{ marginTop: 10 }}
                 onClick={() => {
-                  try { localStorage.setItem('mesh_server_url', customServerUrl) } catch {}
+                  try { localStorage.setItem('mesh_server_url', customServerUrl) } catch (_e) {}
                   setServerUrlSaved(true)
                   setTimeout(() => setServerUrlSaved(false), 2000)
                 }}

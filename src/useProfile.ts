@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { UserProfile, Status } from './types'
 import { readLocal, writeLocal } from './localStore'
 import { broadcastProfile, onPeerProfile } from './mesh'
+import { initIdentity, initECDH } from './crypto'
 
 const AVATAR_COLORS = [
   '#5865f2', '#23a559', '#f0b232',
@@ -37,25 +38,28 @@ function useProfile(username: string) {
     if (!username) return
     let active = true
 
-    loadProfileFromDisk(username).then(existing => {
-      if (!active) return
-      if (existing) {
-        setProfile(existing)
-        // Re-broadcaster aux pairs
-        broadcastProfile(existing)
-      } else {
-        // Nouveau profil — créer et sauvegarder
-        const newProfile: UserProfile = {
-          username,
-          status: 'online',
-          customStatus: '',
-          avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]
+    // Initialiser les deux identités cryptographiques AVANT de broadcaster
+    Promise.all([initIdentity(), initECDH()])
+      .then(() => loadProfileFromDisk(username))
+      .then(existing => {
+        if (!active) return
+        if (existing) {
+          setProfile(existing)
+          // Re-broadcaster aux pairs (avec signature)
+          broadcastProfile(existing)
+        } else {
+          // Nouveau profil — créer et sauvegarder
+          const newProfile: UserProfile = {
+            username,
+            status: 'online',
+            customStatus: '',
+            avatarColor: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]
+          }
+          setProfile(newProfile)
+          saveProfileToDisk(newProfile)
+          broadcastProfile(newProfile)
         }
-        setProfile(newProfile)
-        saveProfileToDisk(newProfile)
-        broadcastProfile(newProfile)
-      }
-    })
+      })
 
     // ── Écouter les profils des pairs qui arrivent via Trystero ──
     const unsubscribe = onPeerProfile((_peerId, peerProfile) => {

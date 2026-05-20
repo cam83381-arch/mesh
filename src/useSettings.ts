@@ -20,6 +20,7 @@ export interface AppSettings {
   inputVolume: number
   outputVolume: number
   developerMode: boolean
+  tenorKey: string
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -39,6 +40,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   inputVolume: 100,
   outputVolume: 100,
   developerMode: false,
+  tenorKey: '',
 }
 
 export function applySettings(s: AppSettings) {

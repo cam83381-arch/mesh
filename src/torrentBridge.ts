@@ -1,22 +1,15 @@
 /**
- * torrentBridge.ts — Pont IPC vers WebTorrent dans le main process Electron
- *
- * Toutes les opérations torrent tournent dans electron/main.js (Node.js pur)
- * pour que le seeding continue même si on change de channel ou de serveur.
- *
- * API exposée :
- *   seedFile(filePath, expiryMs?)  → { magnetUri, infoHash, name, size }
- *   downloadTorrent(magnetUri, destDir?) → { infoHash, name, path, progress }
- *   getTorrentProgress(infoHash)  → { progress, downloadSpeed, uploadSpeed, peers }
- *   stopTorrent(infoHash)         → void
- *   stopAllTorrents()             → void
+ * torrentBridge.ts — Pont vers WebTorrent dans le main process Electron
+ * Utilise les méthodes exposées par le preload (contextBridge).
  */
 
-const ipc = (window as any).electron?.ipcRenderer
+const el = (window as any).electron
 
-async function ipcInvoke<T>(channel: string, ...args: any[]): Promise<T> {
-  if (!ipc) throw new Error('IPC non disponible (hors Electron)')
-  return ipc.invoke(channel, ...args)
+function elInvoke<T>(method: string, ...args: any[]): Promise<T> {
+  if (!el || typeof el[method] !== 'function') {
+    throw new Error('IPC non disponible (hors Electron)')
+  }
+  return el[method](...args)
 }
 
 export interface TorrentSeedResult {
@@ -32,59 +25,39 @@ export interface TorrentProgress {
   uploadSpeed: number    // bytes/s
   peers: number
   done: boolean
-  path?: string          // chemin local une fois terminé
+  path?: string
 }
 
-/**
- * Seed un fichier local → retourne le lien magnet.
- * @param filePath  Chemin absolu vers le fichier (AppData ou chemin choisi par l'user)
- * @param expiryMs  Durée de seeding en ms (défaut : 24h). 0 = jusqu'à fermeture app.
- */
 export async function seedFile(filePath: string, expiryMs = 24 * 60 * 60 * 1000): Promise<TorrentSeedResult> {
-  return ipcInvoke<TorrentSeedResult>('torrent-seed', filePath, expiryMs)
+  return elInvoke<TorrentSeedResult>('torrentSeed', filePath, expiryMs)
 }
 
-/**
- * Télécharger un torrent via son magnet link.
- * Le fichier est sauvegardé dans le dossier Downloads de l'utilisateur.
- */
 export async function downloadTorrent(magnetUri: string): Promise<TorrentProgress> {
-  return ipcInvoke<TorrentProgress>('torrent-download', magnetUri)
+  return elInvoke<TorrentProgress>('torrentDownload', magnetUri)
 }
 
-/**
- * Obtenir la progression d'un torrent en cours (seed ou download).
- */
 export async function getTorrentProgress(infoHash: string): Promise<TorrentProgress | null> {
-  return ipcInvoke<TorrentProgress | null>('torrent-progress', infoHash)
+  return elInvoke<TorrentProgress | null>('torrentProgress', infoHash)
 }
 
-/**
- * Arrêter un torrent (seed ou download) par son infoHash.
- */
 export async function stopTorrent(infoHash: string): Promise<void> {
-  return ipcInvoke<void>('torrent-stop', infoHash)
+  return elInvoke<void>('torrentStop', infoHash)
 }
 
-/**
- * Arrêter tous les torrents (appelé à la fermeture de l'app).
- */
 export async function stopAllTorrents(): Promise<void> {
-  return ipcInvoke<void>('torrent-stop-all')
+  return elInvoke<void>('torrentStopAll')
 }
 
 /**
  * Seed un File (browser File object) depuis le renderer.
- * Écrit le fichier dans un dossier temp AppData puis seed via main process.
  */
 export async function seedBrowserFile(
   file: File,
   expiryMs = 24 * 60 * 60 * 1000
 ): Promise<TorrentSeedResult> {
-  // Lire le fichier comme ArrayBuffer et l'envoyer à main pour écriture + seed
   const buffer = await file.arrayBuffer()
   const uint8 = new Uint8Array(buffer)
-  return ipcInvoke<TorrentSeedResult>('torrent-seed-buffer', {
+  return elInvoke<TorrentSeedResult>('torrentSeedBuffer', {
     name: file.name,
     size: file.size,
     type: file.type,

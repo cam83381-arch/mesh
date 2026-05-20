@@ -83,7 +83,7 @@ function useChannelPermissions(serverId: string, channelId: string) {
     const room = joinMeshRoom(`perms_${serverId}`)
     if (room) {
       const [sendPermsUpdate] = (room.makeAction as any)('perms_update') as [any, any]
-      try { sendPermsUpdate({ channelId }) } catch {}
+      try { sendPermsUpdate({ channelId }) } catch (_e) {}
     }
   }, [serverId, channelId])
 
@@ -98,7 +98,7 @@ function useChannelPermissions(serverId: string, channelId: string) {
     const room = joinMeshRoom(`perms_${serverId}`)
     if (room) {
       const [sendPermsUpdate] = (room.makeAction as any)('perms_update') as [any, any]
-      try { sendPermsUpdate({ channelId }) } catch {}
+      try { sendPermsUpdate({ channelId }) } catch (_e) {}
     }
   }, [serverId, channelId])
 

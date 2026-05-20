@@ -10,6 +10,15 @@ import { useState, useEffect, useRef } from 'react'
 import type { Message } from './types'
 import { readLocal, writeLocal } from './localStore'
 import { joinMeshRoom } from './mesh'
+import {
+  initECDH,
+  getECDHPublicKey,
+  deriveSharedSecret,
+  hasSharedSecret,
+  encryptDM,
+  decryptDM,
+  type EncryptedPayload,
+} from './crypto'
 
 // -- Types --
 export interface DMConversation {
@@ -81,38 +90,76 @@ function useDMs(
     }
     load()
 
-    // 2. Ecouter les DMs entrants via Trystero (room inbox personnelle)
-    const dmRoom = joinMeshRoom(`dm_inbox_${username}`)
-    if (dmRoom) {
-      const [, getDMMsg] = (dmRoom.makeAction as any)('dm_message') as [any, any]
-      const [, getDMConv] = (dmRoom.makeAction as any)('dm_conv') as [any, any]
+    // 2. Initialiser ECDH et écouter les DMs entrants via Trystero
+    initECDH().then(() => {
+      if (!active) return
 
-      // Recevoir un message DM d'un autre pair
+      const dmRoom = joinMeshRoom(`dm_inbox_${username}`)
+      if (!dmRoom) return
+
+      const [sendKeyEx, getKeyEx] = (dmRoom.makeAction as any)('dm_keyex') as [any, any]
+      const [, getDMMsg]          = (dmRoom.makeAction as any)('dm_message') as [any, any]
+      const [, getDMConv]         = (dmRoom.makeAction as any)('dm_conv') as [any, any]
+
+      // ── Échange de clés ECDH ──
+      // Recevoir la clé publique ECDH d'un pair
+      getKeyEx(async (payload: { username: string; ecdhPublicKey: string }) => {
+        if (!active || !payload?.username || !payload?.ecdhPublicKey) return
+        await deriveSharedSecret(payload.username, payload.ecdhPublicKey)
+        // Répondre avec notre clé si le pair ne l'a pas encore
+        const myECDHKey = getECDHPublicKey()
+        if (myECDHKey) {
+          try { sendKeyEx({ username, ecdhPublicKey: myECDHKey }) } catch (_e) {}
+        }
+      })
+
+      // ── Recevoir un message DM chiffré ──
       getDMMsg(async (msg: any) => {
-        if (!active || !msg?.id || !msg?.content || !msg?.convId) return
+        if (!active || !msg?.id || !msg?.convId) return
         if (!msg.participants?.includes(username)) return
+
+        // Déchiffrement E2E
+        let content: string
+        if (msg.encrypted && msg.iv && msg.ciphertext) {
+          const sender = msg.participants.find((p: string) => p !== username) || ''
+          const plain = await decryptDM(
+            { iv: msg.iv, ciphertext: msg.ciphertext } as EncryptedPayload,
+            sender
+          )
+          if (plain === null) {
+            console.warn('[E2E] Impossible de déchiffrer le message de', sender)
+            return
+          }
+          content = plain
+        } else {
+          // Message legacy non chiffré — accepté avec avertissement
+          if (!msg.content) return
+          content = msg.content
+          console.warn('[E2E] Message non chiffré reçu (pair legacy)')
+        }
+
+        const finalMsg: Message = { ...msg, content, encrypted: undefined, iv: undefined, ciphertext: undefined }
 
         const store = await loadDMStore()
 
-        // Creer la conv si absente
+        // Créer la conv si absente
         if (!store.conversations[msg.convId]) {
           store.conversations[msg.convId] = {
             id: msg.convId,
             participants: msg.participants,
-            lastMessage: msg.content.slice(0, 50),
+            lastMessage: content.slice(0, 50),
             lastTimestamp: msg.timestamp
           }
         } else {
-          store.conversations[msg.convId].lastMessage = msg.content.slice(0, 50)
+          store.conversations[msg.convId].lastMessage = content.slice(0, 50)
           store.conversations[msg.convId].lastTimestamp = msg.timestamp
         }
 
-        // Sauvegarder le message
+        // Sauvegarder le message déchiffré
         if (!store.messages[msg.convId]) store.messages[msg.convId] = {}
-        store.messages[msg.convId][msg.id] = msg
+        store.messages[msg.convId][msg.id] = finalMsg
         await saveDMStore(store)
 
-        // Mettre a jour le state
         convsRef.current[msg.convId] = store.conversations[msg.convId]
         setConversations(
           Object.values(convsRef.current)
@@ -121,29 +168,39 @@ function useDMs(
         )
 
         if (activeConvRef.current === msg.convId) {
-          // Conv ouverte -> afficher directement
-          msgsRef.current[msg.id] = msg
+          msgsRef.current[msg.id] = finalMsg
           setMessages(
             Object.values(msgsRef.current)
               .filter(m => m?.content)
               .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
           )
         } else {
-          // Conv fermee -> badge + notification
           const sender = msg.participants.find((p: string) => p !== username) || 'Quelqu\'un'
-          sendDMNotification(sender, msg.content)
+          sendDMNotification(sender, content)
           setUnreadDMs(prev => prev + 1)
         }
       })
 
-      // Recevoir une creation de conv (l'expediteur notifie le destinataire)
+      // ── Recevoir une création de conv ──
       getDMConv(async (conv: any) => {
         if (!active || !conv?.id || !conv?.participants?.includes(username)) return
+
+        // L'expéditeur nous envoie aussi sa clé ECDH dans le paquet conv
+        if (conv.ecdhPublicKey && conv.fromUsername) {
+          await deriveSharedSecret(conv.fromUsername, conv.ecdhPublicKey)
+          // Répondre avec notre clé
+          const myECDHKey = getECDHPublicKey()
+          if (myECDHKey) {
+            try { sendKeyEx({ username, ecdhPublicKey: myECDHKey }) } catch (_e) {}
+          }
+        }
+
         const store = await loadDMStore()
         if (!store.conversations[conv.id]) {
-          store.conversations[conv.id] = conv
+          const { ecdhPublicKey: _, fromUsername: __, ...cleanConv } = conv
+          store.conversations[conv.id] = cleanConv
           await saveDMStore(store)
-          convsRef.current[conv.id] = conv
+          convsRef.current[conv.id] = cleanConv
           setConversations(
             Object.values(convsRef.current)
               .filter(c => c.participants.includes(username))
@@ -151,7 +208,7 @@ function useDMs(
           )
         }
       })
-    }
+    })
 
     return () => { active = false }
   }, [username])
@@ -210,11 +267,18 @@ function useDMs(
           .sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0))
       )
 
-      // Notifier l'autre pair qu'une conv est ouverte
+      // Notifier l'autre pair qu'une conv est ouverte + envoyer notre clé ECDH
       const theirRoom = joinMeshRoom(`dm_inbox_${otherUser}`)
       if (theirRoom) {
         const [sendConv] = (theirRoom.makeAction as any)('dm_conv') as [any, any]
-        try { sendConv(conv) } catch {}
+        const myECDHKey = getECDHPublicKey()
+        try {
+          sendConv({
+            ...conv,
+            ecdhPublicKey: myECDHKey || undefined,
+            fromUsername: username,
+          })
+        } catch (_e) {}
       }
     }
 
@@ -285,12 +349,38 @@ function useDMs(
       )
     }
 
-    // Envoyer via Trystero a la room inbox du destinataire
+    // Envoyer via Trystero — chiffré si possible
     if (recipient) {
       const theirRoom = joinMeshRoom(`dm_inbox_${recipient}`)
       if (theirRoom) {
-        const [sendMsg] = (theirRoom.makeAction as any)('dm_message') as [any, any]
-        try { sendMsg(message) } catch {}
+        const [sendMsg]   = (theirRoom.makeAction as any)('dm_message') as [any, any]
+        const [sendKeyEx] = (theirRoom.makeAction as any)('dm_keyex')   as [any, any]
+
+        // Si pas encore de secret partagé → envoyer notre clé ECDH d'abord
+        if (!hasSharedSecret(recipient)) {
+          const myECDHKey = getECDHPublicKey()
+          if (myECDHKey) {
+            try { sendKeyEx({ username, ecdhPublicKey: myECDHKey }) } catch (_e) {}
+          }
+        }
+
+        // Chiffrer si secret disponible, sinon envoyer en clair (legacy)
+        const encrypted = await encryptDM(content, recipient)
+        if (encrypted) {
+          const { content: _c, ...msgWithoutContent } = message
+          try {
+            sendMsg({
+              ...msgWithoutContent,
+              encrypted: true,
+              iv: encrypted.iv,
+              ciphertext: encrypted.ciphertext,
+            })
+          } catch (_e) {}
+        } else {
+          // Fallback non chiffré (secret pas encore dérivé)
+          try { sendMsg(message) } catch (_e) {}
+          console.warn('[E2E] Message envoyé en clair — secret pas encore disponible avec', recipient)
+        }
       }
     }
   }

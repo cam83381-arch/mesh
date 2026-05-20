@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-const TENOR_KEY = (import.meta.env.VITE_TENOR_KEY as string) || 'LIVDSRZULELA'
+const TENOR_KEY_DEFAULT = (import.meta.env.VITE_TENOR_KEY as string) || 'LIVDSRZULELA'
 const TENOR_BASE = 'https://tenor.googleapis.com/v2'
 const LIMIT = 24
 
@@ -48,9 +48,9 @@ function parseTenorResults(data: any): TenorGif[] {
   }).filter((g: TenorGif) => g.url)
 }
 
-async function fetchTenor(endpoint: string, params: Record<string, string>): Promise<TenorGif[]> {
+async function fetchTenor(endpoint: string, params: Record<string, string>, key: string): Promise<TenorGif[]> {
   const url = new URL(`${TENOR_BASE}/${endpoint}`)
-  url.searchParams.set('key', TENOR_KEY)
+  url.searchParams.set('key', key)
   url.searchParams.set('limit', String(LIMIT))
   url.searchParams.set('media_filter', 'tinygif,nanogif')
   url.searchParams.set('contentfilter', 'medium')
@@ -63,9 +63,11 @@ async function fetchTenor(endpoint: string, params: Record<string, string>): Pro
 interface Props {
   onSelect: (gifUrl: string) => void
   onClose: () => void
+  tenorKey?: string
 }
 
-function GifPicker({ onSelect, onClose }: Props) {
+function GifPicker({ onSelect, onClose, tenorKey }: Props) {
+  const TENOR_KEY = tenorKey || TENOR_KEY_DEFAULT
   const [query, setQuery] = useState('')
   const [activeCat, setActiveCat] = useState(0)
   const [gifs, setGifs] = useState<TenorGif[]>([])
@@ -80,13 +82,13 @@ function GifPicker({ onSelect, onClose }: Props) {
     try {
       let results: TenorGif[]
       if (q.trim()) {
-        results = await fetchTenor('search', { q: q.trim() })
+        results = await fetchTenor('search', { q: q.trim() }, TENOR_KEY)
       } else {
         const catQuery = CATEGORIES[catIndex].query
         if (catQuery) {
-          results = await fetchTenor('search', { q: catQuery })
+          results = await fetchTenor('search', { q: catQuery }, TENOR_KEY)
         } else {
-          results = await fetchTenor('featured', {})
+          results = await fetchTenor('featured', {}, TENOR_KEY)
         }
       }
       setGifs(results)

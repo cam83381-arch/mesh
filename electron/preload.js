@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electron', {
   // Notifications natives
   showNotification: (title, body) =>
     ipcRenderer.send('show-notification', { title, body }),
+  setBadgeCount: (count) =>
+    ipcRenderer.send('set-badge-count', { count }),
 
   // Deep links
   onDeepLink: (callback) =>
@@ -32,6 +34,14 @@ contextBridge.exposeInMainWorld('electron', {
   readLocalFile: (filename) => ipcRenderer.invoke('read-local-file', filename),
   writeLocalFile: (filename, data) => ipcRenderer.invoke('write-local-file', filename, data),
   deleteLocalFile: (filename) => ipcRenderer.invoke('delete-local-file', filename),
+
+  // WebTorrent (seed/download via main process)
+  torrentSeedBuffer: (opts) => ipcRenderer.invoke('torrent-seed-buffer', opts),
+  torrentSeed: (filePath, expiryMs) => ipcRenderer.invoke('torrent-seed', filePath, expiryMs),
+  torrentDownload: (magnetUri) => ipcRenderer.invoke('torrent-download', magnetUri),
+  torrentProgress: (infoHash) => ipcRenderer.invoke('torrent-progress', infoHash),
+  torrentStop: (infoHash) => ipcRenderer.invoke('torrent-stop', infoHash),
+  torrentStopAll: () => ipcRenderer.invoke('torrent-stop-all'),
 
   // Utilitaire
   isElectron: true

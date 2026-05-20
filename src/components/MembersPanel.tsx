@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { Member, Role, CustomRole } from '../types'
 import type { Friendship } from '../useFriends'
 import MemberTooltip from './MemberTooltip'
@@ -27,7 +27,8 @@ const STATUS_COLORS: Record<string, string> = {
   online: '#23a559',
   idle: '#f0b232',
   dnd: '#f23f43',
-  invisible: '#56527e'
+  invisible: '#56527e',
+  offline: '#56527e'
 }
 
 interface OnlineMember extends Member {
@@ -53,6 +54,8 @@ function MembersPanel({ members, serverId, customRoles, friends, onOpenDM, onAdd
   const [onlineMembers, setOnlineMembers] = useState<Record<string, OnlineMember>>({})
   const [offlineCollapsed, setOfflineCollapsed] = useState(false)
   const [search, setSearch] = useState('')
+  // Map peerId Trystero → username pour gérer les déconnexions
+  const peerIdToUsername = useRef<Record<string, string>>({})
 
   useEffect(() => {
     if (!serverId || members.length === 0) return
@@ -67,10 +70,12 @@ function MembersPanel({ members, serverId, customRoles, friends, onOpenDM, onAdd
         const profile = profiles[member.username]
         updates[member.username] = {
           ...member,
-          status:      profile?.status      || 'online',
+          // Par défaut : hors-ligne jusqu'à preuve du contraire (profil Trystero reçu)
+          status:      profile?.status === 'invisible' ? 'invisible' : 'offline',
           avatarColor: profile?.avatarColor || '#6354ff',
           avatarImage: profile?.avatarImage || undefined,
           displayName: profile?.displayName || '',
+          _isRealOffline: true,
         }
       })
       setOnlineMembers(updates)
@@ -79,18 +84,41 @@ function MembersPanel({ members, serverId, customRoles, friends, onOpenDM, onAdd
     loadProfiles()
 
     // Mettre à jour quand un profil pair arrive en temps réel
-    const unsubscribe = onPeerProfile((_peerId, peerProfile) => {
-      if (!active || !peerProfile?.username) return
+    const unsubscribe = onPeerProfile((peerId, peerProfile) => {
+      if (!active) return
+
+      // Cas déconnexion : peerProfile est null
+      if (!peerProfile) {
+        const username = peerIdToUsername.current[peerId]
+        if (!username) return
+        delete peerIdToUsername.current[peerId]
+        // Passer ce membre en hors-ligne
+        setOnlineMembers(prev => {
+          if (!prev[username]) return prev
+          return {
+            ...prev,
+            [username]: { ...prev[username], status: 'offline', _isRealOffline: true },
+          }
+        })
+        return
+      }
+
+      if (!peerProfile?.username) return
       const member = members.find(m => m.username === peerProfile.username)
       if (!member) return
+
+      // Mémoriser peerId → username pour gérer la déconnexion ultérieure
+      peerIdToUsername.current[peerId] = peerProfile.username
+
       setOnlineMembers(prev => ({
         ...prev,
         [peerProfile.username]: {
           ...(prev[peerProfile.username] || member),
-          status:      peerProfile.status      || 'online',
-          avatarColor: peerProfile.avatarColor || '#6354ff',
-          avatarImage: peerProfile.avatarImage || undefined,
-          displayName: peerProfile.displayName || '',
+          status:        peerProfile.status || 'online',
+          avatarColor:   peerProfile.avatarColor || '#6354ff',
+          avatarImage:   peerProfile.avatarImage || undefined,
+          displayName:   peerProfile.displayName || '',
+          _isRealOffline: false,
         }
       }))
     })
@@ -115,16 +143,21 @@ function MembersPanel({ members, serverId, customRoles, friends, onOpenDM, onAdd
 
   members.forEach(m => {
     if (m.role === 'banned') return
-    const withProfile = onlineMembers[m.username] || { ...m, status: 'online', avatarColor: '#6354ff' }
-    const isOffline = withProfile.status === 'invisible'
+    const withProfile = onlineMembers[m.username] || { ...m, status: 'offline', avatarColor: '#6354ff' }
+    // L'utilisateur courant est toujours considéré en ligne pour lui-même
+    const effectiveStatus = m.username === currentUsername
+      ? (withProfile.status === 'invisible' ? 'invisible' : withProfile.status === 'dnd' ? 'dnd' : withProfile.status === 'idle' ? 'idle' : 'online')
+      : withProfile.status
+    const isOffline = effectiveStatus === 'offline' || effectiveStatus === 'invisible'
+    const displayMember = { ...withProfile, status: effectiveStatus }
     if (m.customRoleId && customRoleGroups[m.customRoleId] !== undefined) {
       isOffline
-        ? customRoleGroups[m.customRoleId].offline.push(withProfile)
-        : customRoleGroups[m.customRoleId].online.push(withProfile)
+        ? customRoleGroups[m.customRoleId].offline.push(displayMember)
+        : customRoleGroups[m.customRoleId].online.push(displayMember)
     } else {
       isOffline
-        ? grouped[m.role].offline.push(withProfile)
-        : grouped[m.role].online.push(withProfile)
+        ? grouped[m.role].offline.push(displayMember)
+        : grouped[m.role].online.push(displayMember)
     }
   })
 

@@ -96,6 +96,11 @@ export interface Message {
   // DMs P2P (Trystero)
   convId?: string
   participants?: string[]
+  // Edition
+  edited?: boolean
+  // Chiffrement E2E canal (AES-GCM)
+  encrypted?: boolean
+  payload?: { iv: string; ciphertext: string }
 }
 
 export type Role = 'owner' | 'admin' | 'moderator' | 'member' | 'banned'

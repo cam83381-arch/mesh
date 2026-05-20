@@ -1,12 +1,16 @@
 /**
  * useBotEngine — moteur d'exécution des bots visuels Mesh
  *
- * Écoute les événements du serveur (messages, membres) et traverse
- * le graphe de nodes pour exécuter les actions configurées.
+ * Écoute les événements du serveur via Trystero (messages, réactions,
+ * membres) et traverse le graphe de nodes pour exécuter les actions.
+ *
+ * Source des bots : localStore bots.json (seule source de vérité persistante)
+ * Transport : Trystero makeAction — zéro GunDB
  */
 import { useEffect, useRef, useCallback } from 'react'
 import type { Node, Edge } from '@xyflow/react'
-import gun from './gun'
+import { readLocal } from './localStore'
+import { joinMeshRoom } from './mesh'
 
 interface BotFlow {
   id: string
@@ -27,7 +31,6 @@ interface BotEvent {
   content?: string
   command?: string
   emoji?: string
-  // Pour l'exécution interne
   messageId?: string
 }
 
@@ -35,7 +38,6 @@ interface BotContext {
   event: BotEvent
   variables: Record<string, string | number>
   members?: { username: string; roles?: string[] }[]
-  // Callbacks fournis par l'app
   sendMessage: (channelId: string | undefined, content: string, serverId: string) => void
   sendDM: (targetUsername: string, content: string) => void
   addReaction: (messageId: string, emoji: string) => void
@@ -57,16 +59,12 @@ function resolveTemplate(template: string, ctx: BotContext): string {
     .replace(/\{([^}]+)\}/g, (_, varName) => String(ctx.variables[varName] ?? ''))
 }
 
-// Trouve un canal par nom
 function findChannelId(name: string, ctx: BotContext): string | undefined {
-  const ch = ctx.channels.find(c => c.name.toLowerCase() === name.toLowerCase())
-  return ch?.id
+  return ctx.channels.find(c => c.name.toLowerCase() === name.toLowerCase())?.id
 }
 
-// Cooldown tracking (par bot + node)
 const cooldowns: Map<string, number> = new Map()
 
-// Évalue une condition — retourne true/false
 async function evalCondition(node: Node, ctx: BotContext): Promise<boolean> {
   const config = (node.data.config as Record<string, string>) || {}
   switch (node.type) {
@@ -75,7 +73,7 @@ async function evalCondition(node: Node, ctx: BotContext): Promise<boolean> {
       const target = (config.text || '').toLowerCase()
       if (!target) return true
       if (config.mode === 'exact') return text === target
-      if (config.mode === 'regex') { try { return new RegExp(config.text || '').test(ctx.event.content || '') } catch { return false } }
+      if (config.mode === 'regex') { try { return new RegExp(config.text || '').test(ctx.event.content || '') } catch (_e) { return false } }
       return text.includes(target)
     }
     case 'condition_has_role': {
@@ -108,13 +106,12 @@ async function evalCondition(node: Node, ctx: BotContext): Promise<boolean> {
     }
     case 'condition_and':
     case 'condition_or':
-      return true // logique gérée dans le traversal
+      return true
     default:
       return true
   }
 }
 
-// Exécute une action
 async function execAction(node: Node, ctx: BotContext): Promise<void> {
   const config = (node.data.config as Record<string, string>) || {}
   switch (node.type) {
@@ -130,34 +127,27 @@ async function execAction(node: Node, ctx: BotContext): Promise<void> {
       if (text && ctx.event.authorName) ctx.sendDM(ctx.event.authorName, text)
       break
     }
-    case 'action_add_reaction': {
+    case 'action_add_reaction':
       if (ctx.event.messageId && config.emoji) ctx.addReaction(ctx.event.messageId, config.emoji)
       break
-    }
-    case 'action_delete_message': {
+    case 'action_delete_message':
       if (ctx.event.messageId) ctx.deleteMessage(ctx.event.messageId)
       break
-    }
-    case 'action_kick': {
+    case 'action_kick':
       if (ctx.event.authorName) ctx.kickMember(ctx.event.authorName)
       break
-    }
-    case 'action_ban': {
+    case 'action_ban':
       if (ctx.event.authorName) ctx.banMember(ctx.event.authorName)
       break
-    }
-    case 'action_add_role': {
+    case 'action_add_role':
       if (ctx.event.authorName && config.role) ctx.assignRole(ctx.event.authorName, config.role)
       break
-    }
-    case 'action_remove_role': {
+    case 'action_remove_role':
       if (ctx.event.authorName && config.role) ctx.removeRole(ctx.event.authorName, config.role)
       break
-    }
-    case 'action_pin_message': {
+    case 'action_pin_message':
       if (ctx.event.messageId) ctx.pinMessage(ctx.event.messageId)
       break
-    }
     case 'action_wait': {
       const ms = Number(config.seconds || 0) * 1000
       if (ms > 0 && ms <= 30000) await new Promise(r => setTimeout(r, ms))
@@ -168,7 +158,6 @@ async function execAction(node: Node, ctx: BotContext): Promise<void> {
   }
 }
 
-// Gestion des variables
 function execVariable(node: Node, ctx: BotContext): void {
   const config = (node.data.config as Record<string, string>) || {}
   switch (node.type) {
@@ -182,7 +171,7 @@ function execVariable(node: Node, ctx: BotContext): void {
       ctx.variables[config.name || ''] = Number(ctx.variables[config.name || ''] || 0) - 1
       break
     case 'variable_get':
-      break // déjà accessible via ctx.variables
+      break
     case 'variable_list_add': {
       const listKey = `__list_${config.list || 'default'}`
       const existing: string[] = JSON.parse(String(ctx.variables[listKey] || '[]'))
@@ -210,7 +199,6 @@ function execVariable(node: Node, ctx: BotContext): void {
   }
 }
 
-// Utilitaires
 function execUtility(node: Node, ctx: BotContext): void {
   const config = (node.data.config as Record<string, string>) || {}
   switch (node.type) {
@@ -247,7 +235,6 @@ function execUtility(node: Node, ctx: BotContext): void {
   }
 }
 
-// Traversal du graphe à partir d'un nœud déclencheur
 async function traverseGraph(
   startNode: Node,
   nodes: Node[],
@@ -255,22 +242,15 @@ async function traverseGraph(
   ctx: BotContext,
   depth = 0
 ): Promise<void> {
-  if (depth > 50) return // protection anti-boucle infinie
-
-  // Trouver les nœuds suivants via les edges
+  if (depth > 50) return
   const outEdges = edges.filter(e => e.source === startNode.id)
   for (const edge of outEdges) {
     const nextNode = nodes.find(n => n.id === edge.target)
     if (!nextNode) continue
-
     const category = nextNode.type?.split('_')[0] || ''
-
     if (category === 'condition') {
       const pass = await evalCondition(nextNode, ctx)
-      if (pass) {
-        await traverseGraph(nextNode, nodes, edges, ctx, depth + 1)
-      }
-      // condition_and / condition_or : logique simplifiée — on continue si vrai
+      if (pass) await traverseGraph(nextNode, nodes, edges, ctx, depth + 1)
     } else if (category === 'action') {
       await execAction(nextNode, ctx)
       await traverseGraph(nextNode, nodes, edges, ctx, depth + 1)
@@ -284,7 +264,6 @@ async function traverseGraph(
   }
 }
 
-// Vérifie si un trigger match l'événement
 function triggerMatches(triggerNode: Node, event: BotEvent): boolean {
   const config = (triggerNode.data.config as Record<string, string>) || {}
   switch (triggerNode.type) {
@@ -295,13 +274,10 @@ function triggerMatches(triggerNode: Node, event: BotEvent): boolean {
     case 'trigger_command': {
       if (event.type !== 'message' && event.type !== 'command') return false
       const prefix = config.prefix || '!'
-      // Support both full prefix match (e.g. "!help") and prefix-only (e.g. "!")
       const content = event.content || ''
       if (prefix.length > 1 && !prefix.startsWith('!')) {
-        // prefix is a full command like "!help" — match exactly the command name
         return content.toLowerCase().startsWith(prefix.toLowerCase())
       }
-      // prefix is just the sigil — match any command starting with it
       return content.startsWith(prefix)
     }
     case 'trigger_member_join':
@@ -315,7 +291,7 @@ function triggerMatches(triggerNode: Node, event: BotEvent): boolean {
     case 'trigger_voice_join':
       return event.type === 'voice_join'
     case 'trigger_timer':
-      return false // géré par setInterval séparé
+      return false
     default:
       return false
   }
@@ -341,41 +317,9 @@ interface BotEngineOptions {
 export function useBotEngine(opts: BotEngineOptions) {
   const botsRef = useRef<BotFlow[]>([])
   const timersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
+  const cleanupRef = useRef<Array<() => void>>([])
   const optsRef = useRef(opts)
   optsRef.current = opts
-
-  // Charger et suivre les bots actifs via GunDB
-  useEffect(() => {
-    if (!opts.serverId) return
-    const g = gun
-
-    g.get('bots').get(opts.serverId).map().on((raw: any, botId: string) => {
-      if (!raw || !raw.json) return
-      try {
-        const flow: BotFlow = JSON.parse(raw.json)
-        if (!flow.active) {
-          // Supprimer le bot désactivé
-          botsRef.current = botsRef.current.filter(b => b.id !== botId)
-          // Arrêter le timer si existait
-          const t = timersRef.current.get(botId)
-          if (t) { clearInterval(t); timersRef.current.delete(botId) }
-          return
-        }
-        // Mettre à jour ou ajouter
-        const idx = botsRef.current.findIndex(b => b.id === botId)
-        if (idx >= 0) botsRef.current[idx] = flow
-        else botsRef.current.push(flow)
-
-        // Setup timers pour trigger_timer
-        setupTimers(flow)
-      } catch { /* malformed */ }
-    })
-
-    return () => {
-      timersRef.current.forEach(clearInterval)
-      timersRef.current.clear()
-    }
-  }, [opts.serverId])
 
   const setupTimers = useCallback((flow: BotFlow) => {
     const timerNodes = flow.nodes.filter(n => n.type === 'trigger_timer')
@@ -412,12 +356,10 @@ export function useBotEngine(opts: BotEngineOptions) {
     }
   }, [])
 
-  // Dispatcher appelé depuis l'app quand un événement se produit
   const dispatchBotEvent = useCallback(async (event: BotEvent) => {
     const o = optsRef.current
     for (const flow of botsRef.current) {
       if (!flow.active || flow.serverId !== event.serverId) continue
-      // Trouver les triggers correspondants
       const triggers = flow.nodes.filter(n =>
         n.type?.startsWith('trigger_') && triggerMatches(n, event)
       )
@@ -441,6 +383,126 @@ export function useBotEngine(opts: BotEngineOptions) {
       }
     }
   }, [])
+
+  // Charger les bots depuis localStore + écouter Trystero pour chaque channel
+  useEffect(() => {
+    if (!opts.serverId) return
+    let active = true
+
+    // Cleanup des anciens listeners
+    cleanupRef.current.forEach(fn => fn())
+    cleanupRef.current = []
+    timersRef.current.forEach(clearInterval)
+    timersRef.current.clear()
+
+    const loadAndSubscribe = async () => {
+      // 1. Charger les bots depuis localStore (seule source de vérité)
+      // Structure dans bots.json : { [serverId]: { [botId]: { id, name, active, json: "BotFlow JSON" } } }
+      const data = await readLocal<Record<string, Record<string, { id: string; name: string; active: boolean; json: string }>>>('bots.json') || {}
+      if (!active) return
+
+      const serverData = data[opts.serverId] || {}
+      botsRef.current = Object.values(serverData)
+        .filter(entry => entry.active)
+        .map(entry => {
+          try {
+            const flow: BotFlow = JSON.parse(entry.json || '{}')
+            // S'assurer que les champs de base sont présents
+            return {
+              id: entry.id || flow.id,
+              name: entry.name || flow.name || 'Bot',
+              active: true,
+              serverId: opts.serverId,
+              nodes: flow.nodes || [],
+              edges: flow.edges || [],
+            } as BotFlow
+          } catch (_e) {
+            return null
+          }
+        })
+        .filter((b): b is BotFlow => b !== null && (b.nodes?.length || 0) > 0)
+
+      // 2. Setup timers pour trigger_timer
+      botsRef.current.forEach(setupTimers)
+
+      // 3. Écouter les messages Trystero pour chaque channel
+      for (const channel of optsRef.current.channels) {
+        if (!active) break
+        const roomKey = `${opts.serverId}_${channel.id}`
+        const room = joinMeshRoom(roomKey)
+        if (!room) continue
+
+        let channelActive = true
+        const [, getMsg] = (room.makeAction as any)('msg') as [any, any]
+        const [, getReaction] = (room.makeAction as any)('reaction') as [any, any]
+
+        // Messages entrants → event 'message'
+        getMsg((msg: any) => {
+          if (!channelActive || !active) return
+          if (!msg || !msg.content || !msg.id) return
+          // Ne pas déclencher les bots sur ses propres messages
+          if (msg.author === optsRef.current.username) return
+          const event: BotEvent = {
+            type: 'message',
+            serverId: opts.serverId,
+            channelId: channel.id,
+            channelName: channel.name,
+            authorName: msg.author || msg.authorName,
+            content: msg.content,
+            messageId: msg.id,
+          }
+          dispatchBotEvent(event)
+        })
+
+        // Réactions entrantes → event 'reaction'
+        getReaction((r: any) => {
+          if (!channelActive || !active || r?.remove) return
+          if (!r?.msgId || !r?.emoji || !r?.user) return
+          const event: BotEvent = {
+            type: 'reaction',
+            serverId: opts.serverId,
+            channelId: channel.id,
+            channelName: channel.name,
+            authorName: r.user,
+            emoji: r.emoji,
+            messageId: r.msgId,
+          }
+          dispatchBotEvent(event)
+        })
+
+        cleanupRef.current.push(() => { channelActive = false })
+      }
+
+      // 4. Écouter les événements de présence (member_join / member_leave)
+      const presenceRoom = joinMeshRoom(`presence_${opts.serverId}`)
+      if (presenceRoom && active) {
+        let presActive = true
+        const [, getPresence] = (presenceRoom.makeAction as any)('presence') as [any, any]
+        getPresence((p: any) => {
+          if (!presActive || !active) return
+          if (!p?.username) return
+          const eventType: BotEvent['type'] = p.online ? 'member_join' : 'member_leave'
+          const event: BotEvent = {
+            type: eventType,
+            serverId: opts.serverId,
+            authorName: p.username,
+          }
+          dispatchBotEvent(event)
+        })
+        cleanupRef.current.push(() => { presActive = false })
+      }
+    }
+
+    loadAndSubscribe()
+
+    return () => {
+      active = false
+      cleanupRef.current.forEach(fn => fn())
+      cleanupRef.current = []
+      timersRef.current.forEach(clearInterval)
+      timersRef.current.clear()
+    }
+  }, [opts.serverId, opts.channels.map(c => c.id).join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return { dispatchBotEvent }
 }

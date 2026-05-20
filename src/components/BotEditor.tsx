@@ -68,7 +68,7 @@ function BotEditorInner({ serverId, botId, onBack }: Props) {
         setIsActive(flow.active || false)
         setNodes(flow.nodes || [])
         setEdges(flow.edges || [])
-      } catch { /* ignore malformed data */ }
+      } catch (_e) { /* ignore malformed data */ }
     }
     load()
   }, [botId, serverId, setNodes, setEdges])

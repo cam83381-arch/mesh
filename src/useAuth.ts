@@ -1,17 +1,19 @@
-/**
- * useAuth.ts — Auth locale (AppData) + annuaire public GunDB
- *
- * Séparation claire :
- *   - users.json (AppData)  → credentials { username, passwordHash } — jamais partagé
- *   - gun.get('userIndex')  → annuaire public { exists: true }       — pseudo seulement
- */
-
 import { useState } from 'react'
-import Gun from 'gun'
 import { readLocal, writeLocal } from './localStore'
 import gun from './gun'
 
-const sea: any = (Gun as any).SEA
+// Hash de mot de passe via Web Crypto API (PBKDF2) -- pas de dependance Gun/SEA
+async function hashPassword(password: string, salt: string): Promise<string> {
+  const enc = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']
+  )
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, 256
+  )
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
 
 interface StoredUser {
   username: string
@@ -21,13 +23,13 @@ interface StoredUser {
 
 type UsersDB = Record<string, StoredUser>
 
-function persistSession(username: string) {
-  try {
-    localStorage.setItem('mesh_session_user', JSON.stringify({
-      id: username, username, email: '',
-      profile: { username, status: 'online', avatarColor: '#5865f2' }
-    }))
-  } catch {}
+async function persistSession(username: string) {
+  const sessionData = {
+    id: username, username, email: '',
+    profile: { username, status: 'online', avatarColor: '#5865f2' }
+  }
+  await writeLocal('session.json', sessionData)
+  try { localStorage.setItem('mesh_session_user', JSON.stringify(sessionData)) } catch (e) {}
 }
 
 function useAuth() {
@@ -38,15 +40,13 @@ function useAuth() {
     setLoading(true)
     setError('')
 
-    // 1. Vérifier localement (même machine)
     const users: UsersDB = (await readLocal<UsersDB>('users.json')) || {}
     if (users[username.toLowerCase()]) {
-      setError('Ce pseudo est déjà pris !')
+      setError('Ce pseudo est deja pris !')
       setLoading(false)
       return null
     }
 
-    // 2. Vérifier dans l'annuaire GunDB public (autres machines)
     const alreadyInIndex = await new Promise<boolean>((resolve) => {
       const tid = setTimeout(() => resolve(false), 3000)
       gun.get('userIndex').get(username.toLowerCase()).once((data: any) => {
@@ -56,28 +56,26 @@ function useAuth() {
     })
 
     if (alreadyInIndex) {
-      setError('Ce pseudo est déjà pris sur le réseau !')
+      setError('Ce pseudo est deja pris sur le reseau !')
       setLoading(false)
       return null
     }
 
-    // 3. Créer le compte localement
-    const passwordHash = await sea.work(password, username)
+    const passwordHash = await hashPassword(password, username.toLowerCase())
     users[username.toLowerCase()] = { username, passwordHash, createdAt: Date.now() }
 
     const ok = await writeLocal('users.json', users)
     if (!ok) {
-      try { localStorage.setItem('mesh_users', JSON.stringify(users)) } catch {}
+      try { localStorage.setItem('mesh_users', JSON.stringify(users)) } catch (e) {}
     }
 
-    // 4. Publier le pseudo dans l'annuaire GunDB (pas le mot de passe)
     gun.get('userIndex').get(username.toLowerCase()).put({
       exists: true,
-      username,          // casse d'origine pour affichage
+      username,
       createdAt: Date.now()
     })
 
-    persistSession(username)
+    await persistSession(username)
     setLoading(false)
     return username
   }
@@ -88,32 +86,30 @@ function useAuth() {
 
     let users: UsersDB = (await readLocal<UsersDB>('users.json')) || {}
 
-    // Fallback localStorage
     if (Object.keys(users).length === 0) {
       try {
         const raw = localStorage.getItem('mesh_users')
         if (raw) users = JSON.parse(raw)
-      } catch {}
+      } catch (e) {}
     }
 
     const stored = users[username.toLowerCase()]
 
     if (!stored) {
-      setError('Utilisateur introuvable sur cette machine. Vérifie ton pseudo ou crée un compte.')
+      setError('Utilisateur introuvable sur cette machine.')
       setLoading(false)
       return null
     }
 
-    const passwordHash = await sea.work(password, username)
+    const passwordHash = await hashPassword(password, username.toLowerCase())
 
     if (passwordHash === stored.passwordHash) {
-      // Re-publier dans l'annuaire au cas où (nouveau pair, nouvelle install)
       gun.get('userIndex').get(username.toLowerCase()).put({
         exists: true,
         username: stored.username,
         createdAt: stored.createdAt
       })
-      persistSession(stored.username)
+      await persistSession(stored.username)
       setLoading(false)
       return stored.username
     } else {

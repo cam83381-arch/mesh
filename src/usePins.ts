@@ -57,7 +57,7 @@ function usePins(channelKey: string) {
       room.onPeerJoin(async () => {
         const p = await loadPins(channelKey)
         Object.values(p).forEach(msg => {
-          try { sendPin(msg) } catch {}
+          try { sendPin(msg) } catch (_e) {}
         })
       })
     }
@@ -71,7 +71,7 @@ function usePins(channelKey: string) {
     p[message.id] = message
     await savePins(channelKey, p)
     setPins(sortPins(p))
-    try { sendPinFn.current?.(message) } catch {}
+    try { sendPinFn.current?.(message) } catch (_e) {}
   }
 
   const unpinMessage = async (messageId: string) => {
@@ -82,7 +82,7 @@ function usePins(channelKey: string) {
     await savePins(channelKey, p)
     setPins(sortPins(p))
     if (deleted) {
-      try { sendPinFn.current?.({ ...deleted, _deleted: true }) } catch {}
+      try { sendPinFn.current?.({ ...deleted, _deleted: true }) } catch (_e) {}
     }
   }
 

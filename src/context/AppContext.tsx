@@ -1,15 +1,17 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { User } from '../types';
+import { readLocal, writeLocal, deleteLocal } from '../localStore';
 
 const SESSION_KEY = 'mesh_session_user'
+const SESSION_FILE = 'session.json'
 
-function loadSession(): User | null {
+function loadSessionSync(): User | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY)
     if (!raw) return null
     return JSON.parse(raw) as User
-  } catch { return null }
+  } catch (_e) { return null }
 }
 
 interface AppContextType {
@@ -20,14 +22,26 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
-  const [user, _setUser] = useState<User | null>(() => loadSession());
+  const [user, _setUser] = useState<User | null>(() => loadSessionSync());
+
+  useEffect(() => {
+    readLocal<User>(SESSION_FILE).then((stored) => {
+      if (stored && stored.username) {
+        _setUser(stored)
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(stored)) } catch (e) {}
+      }
+    })
+  }, [])
 
   const setUser = useCallback((u: User | null) => {
     _setUser(u)
-    try {
-      if (u) localStorage.setItem(SESSION_KEY, JSON.stringify(u))
-      else localStorage.removeItem(SESSION_KEY)
-    } catch {}
+    if (u) {
+      writeLocal(SESSION_FILE, u)
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(u)) } catch (e) {}
+    } else {
+      deleteLocal(SESSION_FILE)
+      try { localStorage.removeItem(SESSION_KEY) } catch (e) {}
+    }
   }, [])
 
   return (

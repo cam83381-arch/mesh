@@ -18,7 +18,7 @@ export async function readLocal<T>(filename: string): Promise<T | null> {
   try {
     const raw = localStorage.getItem(`mesh_local_${filename}`)
     return raw ? JSON.parse(raw) : null
-  } catch { return null }
+  } catch (_e) { return null }
 }
 
 // Écriture
@@ -29,7 +29,7 @@ export async function writeLocal(filename: string, data: unknown): Promise<boole
   try {
     localStorage.setItem(`mesh_local_${filename}`, JSON.stringify(data))
     return true
-  } catch { return false }
+  } catch (_e) { return false }
 }
 
 // Suppression
@@ -40,5 +40,5 @@ export async function deleteLocal(filename: string): Promise<boolean> {
   try {
     localStorage.removeItem(`mesh_local_${filename}`)
     return true
-  } catch { return false }
+  } catch (_e) { return false }
 }

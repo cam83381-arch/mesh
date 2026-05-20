@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import type { Message, Channel, Member, CustomRole } from '../types'
+import { DEFAULT_PERMISSIONS } from '../types'
 import type { Friendship } from '../useFriends'
 import { useApp } from '../context/AppContext'
 import MemberTooltip from './MemberTooltip'
@@ -42,12 +43,16 @@ interface Props {
   serverId?: string
   isDM?: boolean
   notifSettings?: { soundEnabled?: boolean; desktopNotifications?: boolean; mentionsOnly?: boolean }
+  tenorKey?: string
+  hasMore?: boolean
+  onLoadMore?: () => void
 }
 
 function ChatArea({
   channel, messages, reactions, typingUsers,
   members, customRoles, friends, serverId, isDM = false,
-  notifSettings = {},
+  notifSettings = {}, tenorKey,
+  hasMore = false, onLoadMore,
   onSendMessage, onEditMessage, onDeleteMessage,
   onAddReaction, onRemoveReaction, onTyping, onOpenDM, onAddFriend, onRemoveFriend
 }: Props) {
@@ -65,7 +70,10 @@ function ChatArea({
   // ── Permissions du salon ──
   const { overrides: chanOverrides } = useChannelPermissions(serverId || '', channel?.id || '')
   const myMember = members?.find(m => m.username === username)
-  const chanPerms = resolveChannelPerms(username, myMember, customRoles || [], chanOverrides)
+  const chanPerms = resolveChannelPerms(username, myMember, customRoles || [], chanOverrides, myMember?.role)
+  // canDeleteMessages : son propre message OU rôle avec permission de suppression
+  const myServerPerms = myMember ? DEFAULT_PERMISSIONS[myMember.role] : DEFAULT_PERMISSIONS.member
+  const canDeleteOthers = myServerPerms.canDeleteMessages
 
   // ── Émojis personnalisés du serveur ──
   const { emojis: serverEmojis } = useServerEmojis(serverId || '', username)
@@ -83,6 +91,7 @@ function ChatArea({
   const [showPins, setShowPins] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
   const [mentionFilter, setMentionFilter] = useState<string | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
 
@@ -90,16 +99,7 @@ function ChatArea({
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [displayLimit, setDisplayLimit] = useState(50)
-  const prevChannelRef = useRef<string>('')
-
-  // Remettre à 50 quand on change de salon
-  useEffect(() => {
-    if (channel?.id !== prevChannelRef.current) {
-      prevChannelRef.current = channel?.id || ''
-      setDisplayLimit(50)
-    }
-  }, [channel?.id])
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -115,6 +115,46 @@ function ChatArea({
     }
   }, [messages.length])
 
+  // ── Ctrl+F pour ouvrir la recherche ──
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        setShowSearch(s => {
+          if (!s) {
+            setShowPins(false)
+            setTimeout(() => searchInputRef.current?.focus(), 50)
+            return true
+          }
+          // Déjà ouvert → focus l'input
+          searchInputRef.current?.focus()
+          return true
+        })
+      }
+      if (e.key === 'Escape') {
+        setShowSearch(s => {
+          if (s) { setSearchQuery(''); setSearchMatchIndex(0) }
+          return false
+        })
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKey)
+    return () => window.removeEventListener('keydown', handleGlobalKey)
+  }, [])
+
+  // Réinitialiser l'index de match quand la query change
+  useEffect(() => {
+    setSearchMatchIndex(0)
+  }, [searchQuery])
+
+  // Scroll vers le message actif lors de la navigation recherche
+  const activeMatchRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (searchQuery && activeMatchRef.current) {
+      activeMatchRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [searchMatchIndex, searchQuery])
+
   // ── Filtrage + pagination messages ──
   const filteredMessages = searchQuery
     ? messages.filter(m =>
@@ -123,23 +163,40 @@ function ChatArea({
       )
     : messages
 
-  const hasMore = !searchQuery && filteredMessages.length > displayLimit
-  const displayMessages = searchQuery
-    ? filteredMessages
-    : filteredMessages.slice(-displayLimit)
+  // displayMessages : tous les messages filtrés (la pagination est gérée dans useSocket)
+  const displayMessages = filteredMessages
 
-  // ── Envoi fichier P2P via WebTorrent (seed → magnet link dans le chat) ──
+  // ── Envoi fichier : WebTorrent via Electron, ou base64 en fallback navigateur ──
   const uploadFile = useCallback(async (file: File) => {
     if (!channel) return
-    if (file.size > MAX_FILE_SIZE) {
+    const MAX_BASE64_SIZE = 8 * 1024 * 1024 // 8 Mo max en base64 (hors Electron)
+    const isElectron = !!(window as any).electron?.isElectron
+
+    if (!isElectron && file.size > MAX_BASE64_SIZE) {
+      alert(`Hors Electron, les fichiers sont limités à 8 Mo (reçu : ${(file.size / 1024 / 1024).toFixed(1)} Mo).\nLance l'app avec npm run dev:electron pour les gros fichiers.`)
+      return
+    }
+    if (isElectron && file.size > MAX_FILE_SIZE) {
       alert(`Fichier trop volumineux (max 2 Go) : ${(file.size / 1024 / 1024).toFixed(1)} Mo`)
       return
     }
+
     setUploading(true)
     try {
-      const result = await seedBrowserFile(file)
-      // Envoyer le magnet comme message avec métadonnées
-      onSendMessage('', undefined, result.magnetUri, file.name, file.type, file.size)
+      if (isElectron) {
+        // Mode Electron : seed via WebTorrent (P2P)
+        const result = await seedBrowserFile(file)
+        onSendMessage('', undefined, result.magnetUri, file.name, file.type, file.size)
+      } else {
+        // Mode navigateur : encodage base64 direct (pas de torrent)
+        const reader = new FileReader()
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+        onSendMessage('', undefined, dataUrl, file.name, file.type, file.size)
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Erreur lors du partage'
       alert('Impossible de partager le fichier : ' + msg)
@@ -280,8 +337,9 @@ function ChatArea({
         continue
       }
 
-      // Inline: code, bold, italic, links, mentions
-      const inlineRegex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/\S+|@\w+)/g
+      // Inline: emojis serveur (:name:), code, bold, italic, links, mentions
+      // L'ordre de matching : emojis serveur d'abord pour éviter d'être capturés par d'autres règles
+      const inlineRegex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/\S+|@\w+|:[a-z0-9_-]{1,32}:)/g
       let iLast = 0
       let iMatch: RegExpExecArray | null
       inlineRegex.lastIndex = 0
@@ -308,6 +366,25 @@ function ChatArea({
           nodes.push(
             <span key={key++} className="msg-mention">{token}</span>
           )
+        } else if (token.startsWith(':') && token.endsWith(':')) {
+          // Emoji serveur personnalisé
+          const emojiName = token.slice(1, -1)
+          const serverEmoji = serverEmojis.find(e => e.name === emojiName)
+          if (serverEmoji) {
+            nodes.push(
+              <img
+                key={key++}
+                src={serverEmoji.url}
+                alt={`:${emojiName}:`}
+                title={`:${emojiName}:`}
+                className="msg-server-emoji"
+                style={{ width: '22px', height: '22px', verticalAlign: 'middle', display: 'inline-block', margin: '0 1px' }}
+              />
+            )
+          } else {
+            // Pas un emoji serveur connu → afficher tel quel
+            nodes.push(<span key={key++}>{token}</span>)
+          }
         }
         iLast = iMatch.index + token.length
       }
@@ -318,6 +395,24 @@ function ChatArea({
 
     return nodes
   }
+
+  // ── Surlignage des occurrences de recherche dans le texte brut ──
+  const highlightText = useCallback((text: string): React.ReactNode => {
+    if (!searchQuery || !text) return text
+    const lower = text.toLowerCase()
+    const q = searchQuery.toLowerCase()
+    const parts: React.ReactNode[] = []
+    let pos = 0
+    let i = lower.indexOf(q, pos)
+    while (i !== -1) {
+      if (i > pos) parts.push(<span key={pos}>{text.slice(pos, i)}</span>)
+      parts.push(<mark key={i} className="search-highlight">{text.slice(i, i + q.length)}</mark>)
+      pos = i + q.length
+      i = lower.indexOf(q, pos)
+    }
+    if (pos < text.length) parts.push(<span key={pos}>{text.slice(pos)}</span>)
+    return parts.length > 0 ? <>{parts}</> : text
+  }, [searchQuery])
 
   // ── Rendu pièce jointe (P2P WebTorrent ou ancienne URL) ──
   const renderAttachment = (msg: Message) => {
@@ -425,17 +520,45 @@ function ChatArea({
       {/* Panneau recherche */}
       {showSearch && (
         <div className="search-panel">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#56527e', flexShrink: 0 }}>
+            <path d="M21.7 20.29l-4.54-4.54A8 8 0 1 0 3 11a8 8 0 0 0 13.75 5.17l4.54 4.54a1 1 0 0 0 1.41-1.42zM11 17a6 6 0 1 1 0-12 6 6 0 0 1 0 12z"/>
+          </svg>
           <input
+            ref={searchInputRef}
             className="search-input"
             placeholder={`Rechercher dans #${channelName}…`}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { setShowSearch(false); setSearchQuery(''); setSearchMatchIndex(0) }
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                if (displayMessages.length > 0)
+                  setSearchMatchIndex(i => (i + (e.shiftKey ? -1 : 1) + displayMessages.length) % displayMessages.length)
+              }
+            }}
             autoFocus
           />
-          <button className="search-close-btn" onClick={() => { setShowSearch(false); setSearchQuery('') }}>✕</button>
           {searchQuery && (
-            <span className="search-count">{displayMessages.length} résultat{displayMessages.length !== 1 ? 's' : ''}</span>
+            <span className="search-count">
+              {displayMessages.length === 0 ? 'Aucun résultat' : `${searchMatchIndex + 1} / ${displayMessages.length}`}
+            </span>
           )}
+          {searchQuery && displayMessages.length > 1 && (
+            <>
+              <button
+                className="search-nav-btn"
+                title="Résultat précédent (Shift+Entrée)"
+                onClick={() => setSearchMatchIndex(i => (i - 1 + displayMessages.length) % displayMessages.length)}
+              >↑</button>
+              <button
+                className="search-nav-btn"
+                title="Résultat suivant (Entrée)"
+                onClick={() => setSearchMatchIndex(i => (i + 1) % displayMessages.length)}
+              >↓</button>
+            </>
+          )}
+          <button className="search-close-btn" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchMatchIndex(0) }}>✕</button>
         </div>
       )}
 
@@ -446,17 +569,17 @@ function ChatArea({
         ref={messagesContainerRef}
       >
         {/* Bouton charger plus de messages */}
-        {hasMore && (
+        {hasMore && !searchQuery && (
           <div style={{ textAlign: 'center', padding: '12px 0' }}>
             <button
-              onClick={() => setDisplayLimit(prev => prev + 50)}
+              onClick={() => onLoadMore?.()}
               style={{
                 background: '#141428', border: '1px solid #1e1f22',
                 color: '#8884c4', borderRadius: '8px',
                 padding: '6px 16px', fontSize: '13px', cursor: 'pointer'
               }}
             >
-              ↑ Charger les messages précédents ({filteredMessages.length - displayLimit} restants)
+              ↑ Charger les messages précédents
             </button>
           </div>
         )}
@@ -527,11 +650,13 @@ function ChatArea({
           const prevName = prev ? (prev.author || prev.authorName || '') : ''
           const isGrouped = !!prev && prevName === displayName &&
             (msg.timestamp || 0) - (prev.timestamp || 0) < 7 * 60 * 1000
+          const isActiveMatch = searchQuery !== '' && idx === searchMatchIndex
 
           return (
             <div
               key={msg.id}
-              className={`msg-group${isGrouped ? ' grouped' : ''}`}
+              ref={isActiveMatch ? activeMatchRef : undefined}
+              className={`msg-group${isGrouped ? ' grouped' : ''}${isActiveMatch ? ' search-active-match' : ''}`}
               onMouseEnter={() => setHoveredMsgId(msg.id)}
               onMouseLeave={() => { setShowEmojiFor(null); setHoveredMsgId(null) }}
             >
@@ -600,7 +725,10 @@ function ChatArea({
                   ) : (
                     <div className="msg-content">
                       {renderAttachment(msg)}
-                      {msg.content && renderMarkdown(msg.content)}
+                      {msg.content && (searchQuery
+                        ? <span>{highlightText(msg.content)}</span>
+                        : renderMarkdown(msg.content)
+                      )}
                     </div>
                   )}
 
@@ -642,7 +770,7 @@ function ChatArea({
                 {isOwn && <button className="msg-action-btn" title="Éditer" onClick={() => startEdit(msg)}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                 </button>}
-                {isOwn && <button className="msg-action-btn danger" title="Supprimer" onClick={() => onDeleteMessage(msg.id)}>
+                {(isOwn || canDeleteOthers) && <button className="msg-action-btn danger" title="Supprimer" onClick={() => onDeleteMessage(msg.id)}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>}
               </div>
@@ -687,6 +815,7 @@ function ChatArea({
       {/* GIF Picker */}
       {showGifs && (
         <GifPicker
+          tenorKey={tenorKey}
           onSelect={(url) => {
             onSendMessage('', undefined, url, 'GIF', 'image/gif', 0)
             setShowGifs(false)

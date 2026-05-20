@@ -116,7 +116,7 @@ function useFriends(username: string) {
     const theirRoom = joinMeshRoom(`friend_inbox_${targetUsername}`)
     if (theirRoom) {
       const [sendEvent] = (theirRoom.makeAction as any)('friend_event') as [any, any]
-      try { sendEvent({ type: 'request', pairId, user1: sorted[0], user2: sorted[1], initiator: username, timestamp: entry.timestamp }) } catch {}
+      try { sendEvent({ type: 'request', pairId, user1: sorted[0], user2: sorted[1], initiator: username, timestamp: entry.timestamp }) } catch (_e) {}
     }
   }
 
@@ -131,7 +131,7 @@ function useFriends(username: string) {
       const theirRoom = joinMeshRoom(`friend_inbox_${other}`)
       if (theirRoom) {
         const [sendEvent] = (theirRoom.makeAction as any)('friend_event') as [any, any]
-        try { sendEvent({ type: 'accepted', pairId }) } catch {}
+        try { sendEvent({ type: 'accepted', pairId }) } catch (_e) {}
       }
     }
   }
@@ -146,7 +146,7 @@ function useFriends(username: string) {
       const theirRoom = joinMeshRoom(`friend_inbox_${other}`)
       if (theirRoom) {
         const [sendEvent] = (theirRoom.makeAction as any)('friend_event') as [any, any]
-        try { sendEvent({ type: 'removed', pairId }) } catch {}
+        try { sendEvent({ type: 'removed', pairId }) } catch (_e) {}
       }
     }
   }

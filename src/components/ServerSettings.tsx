@@ -60,7 +60,7 @@ function broadcastSettingsUpdate(serverId: string, type: string, payload?: Recor
   const room = joinMeshRoom(`settings_${serverId}`)
   if (room) {
     const [send] = (room.makeAction as any)('settings_update') as [any, any]
-    try { send({ type, ...(payload || {}) }) } catch {}
+    try { send({ type, ...(payload || {}) }) } catch (_e) {}
   }
 }
 
@@ -104,15 +104,16 @@ const PERM_LABELS: Record<keyof Permissions, string> = {
 }
 
 const SECTIONS = [
-  { id: 'profile',  label: 'Profil du serveur', group: 'GESTION DU SERVEUR' },
-  { id: 'invites',  label: 'Invitations',        group: null },
-  { id: 'members',  label: 'Membres',            group: 'PERSONNES' },
-  { id: 'roles',    label: 'Rôles',              group: null },
-  { id: 'bans',     label: 'Bannissements',      group: null },
-  { id: 'logs',     label: "Logs d'activité",    group: 'MODÉRATION' },
-  { id: 'automod',  label: 'AutoMod',            group: null },
-  { id: 'emojis',   label: 'Émojis',             group: 'PERSONNALISATION' },
-  { id: 'bots',     label: 'Bots installés',     group: 'APPLICATIONS' },
+  { id: 'profile',   label: 'Profil du serveur', group: 'GESTION DU SERVEUR' },
+  { id: 'invites',   label: 'Invitations',        group: null },
+  { id: 'security',  label: '🔒 Sécurité E2E',   group: null },
+  { id: 'members',   label: 'Membres',            group: 'PERSONNES' },
+  { id: 'roles',     label: 'Rôles',              group: null },
+  { id: 'bans',      label: 'Bannissements',      group: null },
+  { id: 'logs',      label: "Logs d'activité",    group: 'MODÉRATION' },
+  { id: 'automod',   label: 'AutoMod',            group: null },
+  { id: 'emojis',    label: 'Émojis',             group: 'PERSONNALISATION' },
+  { id: 'bots',      label: 'Bots installés',     group: 'APPLICATIONS' },
 ]
 
 // ── Props ──
@@ -133,6 +134,9 @@ interface Props {
   onUpdatePermission: (roleId: string, permission: keyof Permissions, value: boolean) => void
   onDeleteRole: (roleId: string) => void
   onOpenBotEditor: (botId: string | null) => void
+  channels?: { id: string; name: string; type: string }[]
+  onEnsureChannelKeys?: (channelIds: string[]) => Promise<void>
+  channelKeyStatus?: Record<string, boolean> // channelId → hasKey
 }
 
 // ══════════════════════════════════════════════════════════
@@ -142,6 +146,7 @@ function ServerSettings({
   onUpdateRole, onKickMember, onAssignCustomRole,
   onCreateRole, onUpdateCustomRole, onUpdatePermission, onDeleteRole,
   onOpenBotEditor,
+  channels = [], onEnsureChannelKeys, channelKeyStatus = {},
 }: Props) {
   const isOwner = server.ownerId === username
   const [tab, setTab] = useState('profile')
@@ -314,7 +319,7 @@ function ServerSettings({
         img.src = url
       })
       setIconUrl(dataUrl)
-    } catch { alert("Impossible de traiter l'icone.") }
+    } catch (_e) { alert("Impossible de traiter l'icone.") }
     finally { setUploadingIcon(false) }
   }
 
@@ -341,7 +346,7 @@ function ServerSettings({
         img.src = url
       })
       setBannerUrl(dataUrl)
-    } catch { alert("Impossible de traiter la bannière.") }
+    } catch (_e) { alert("Impossible de traiter la bannière.") }
     finally { setUploadingBanner(false) }
   }
 
@@ -673,6 +678,92 @@ function ServerSettings({
 
             {Object.keys(invites).length === 0 && (
               <div className="us-info-box" style={{ marginTop: '16px' }}>Aucune invitation pour ce serveur.</div>
+            )}
+          </div>
+        )
+      }
+
+      // ───────────────────────── SÉCURITÉ E2E ─────────────────────────
+      case 'security': {
+        const textChannels = channels.filter(c => c.type === 'text')
+        const allKeysPresent = textChannels.length > 0 && textChannels.every(c => channelKeyStatus[c.id])
+        const missingKeys = textChannels.filter(c => !channelKeyStatus[c.id])
+        return (
+          <div className="us-content">
+            <h2 className="us-title">Sécurité E2E</h2>
+            <p style={{ color: '#949ba4', fontSize: '13px', marginBottom: '20px' }}>
+              Chaque canal texte est chiffré de bout en bout avec AES-GCM 256 bits.
+              Les clés sont échangées entre membres via ECDH — jamais exposées en clair.
+            </p>
+
+            {/* Statut global */}
+            <div style={{
+              background: allKeysPresent ? 'rgba(87,242,135,0.1)' : 'rgba(240,178,50,0.1)',
+              border: `1px solid ${allKeysPresent ? '#57f287' : '#f0b232'}`,
+              borderRadius: '8px', padding: '14px 16px', marginBottom: '20px',
+              display: 'flex', alignItems: 'center', gap: '10px',
+            }}>
+              <span style={{ fontSize: '20px' }}>{allKeysPresent ? '🔒' : '⚠️'}</span>
+              <div>
+                <div style={{ color: allKeysPresent ? '#57f287' : '#f0b232', fontWeight: 600, fontSize: '14px' }}>
+                  {allKeysPresent ? 'Tous les canaux sont chiffrés' : `${missingKeys.length} canal${missingKeys.length > 1 ? 'ux' : ''} sans clé`}
+                </div>
+                <div style={{ color: '#949ba4', fontSize: '12px', marginTop: '2px' }}>
+                  {textChannels.length} canal{textChannels.length > 1 ? 'ux' : ''} texte au total
+                </div>
+              </div>
+            </div>
+
+            {/* Liste des canaux et leur statut */}
+            <div style={{ marginBottom: '20px' }}>
+              <h3 className="us-subtitle">État des canaux</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {textChannels.map(c => (
+                  <div key={c.id} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '8px 12px', background: '#2b2d31', borderRadius: '6px',
+                  }}>
+                    <span style={{ color: '#dbdee1', fontSize: '14px' }}>#{c.name}</span>
+                    <span style={{
+                      fontSize: '12px', fontWeight: 600,
+                      color: channelKeyStatus[c.id] ? '#57f287' : '#ed4245',
+                    }}>
+                      {channelKeyStatus[c.id] ? '🔒 Chiffré' : '🔓 Clé manquante'}
+                    </span>
+                  </div>
+                ))}
+                {textChannels.length === 0 && (
+                  <p style={{ color: '#949ba4', fontSize: '13px' }}>Aucun canal texte sur ce serveur.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Action owner : régénérer les clés manquantes */}
+            {isOwner && onEnsureChannelKeys && missingKeys.length > 0 && (
+              <div>
+                <h3 className="us-subtitle">Actions</h3>
+                <button
+                  className="us-btn primary"
+                  onClick={async () => {
+                    await onEnsureChannelKeys(missingKeys.map(c => c.id))
+                  }}
+                >
+                  🔑 Générer les clés manquantes ({missingKeys.length})
+                </button>
+                <p style={{ color: '#949ba4', fontSize: '12px', marginTop: '8px' }}>
+                  Les membres connectés recevront automatiquement les clés via WebRTC.
+                </p>
+              </div>
+            )}
+
+            {!isOwner && (
+              <div style={{
+                background: '#1e1f22', borderRadius: '8px', padding: '14px 16px',
+                color: '#949ba4', fontSize: '13px',
+              }}>
+                💡 Si tu ne reçois pas les messages chiffrés, assure-toi qu'un admin ou le propriétaire est en ligne.
+                La clé te sera envoyée automatiquement dès qu'un membre qui la possède est disponible.
+              </div>
             )}
           </div>
         )

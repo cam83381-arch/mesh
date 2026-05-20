@@ -104,15 +104,13 @@ function useServers(username: string) {
     const label = name.slice(0, 2).toUpperCase()
     const server: Server = { id, name, label, color, ownerId: username }
 
-    // Sauvegarder localement
+    // Sauvegarder localement (source de vérité)
     await saveServer(server)
     const ids = await loadUserServerIds(username)
     await saveUserServerIds(username, [...ids, id])
 
-    // Publier sur GunDB pour que les amis puissent rejoindre via ID
+    // Publier sur GunDB uniquement pour la découverte (joinServer, invites)
     gun.get('servers').get(id).put(server)
-    gun.get('userServers').get(username).get(id).put(id)
-    gun.get('members').get(id).get(username).put({ username, role: 'owner', joinedAt: Date.now() })
 
     const defaultChannels = [
       { id: `${id}_1`, name: 'général',   type: 'text',  serverId: id },
@@ -122,13 +120,11 @@ function useServers(username: string) {
       { id: `${id}_5`, name: 'Gaming',    type: 'voice', serverId: id },
       { id: `${id}_6`, name: 'Stream',    type: 'voice', serverId: id },
     ]
-    defaultChannels.forEach(ch => gun.get('channels').get(id).get(ch.id).put(ch))
 
-    // Sauvegarder les canaux localement
-    const { readLocal: rl, writeLocal: wl } = await import('./localStore')
-    const chData = await rl<Record<string, any[]>>('channels.json') || {}
+    // Sauvegarder les canaux localement (pas de GunDB — useChannels Trystero les diffusera)
+    const chData = await readLocal<Record<string, any[]>>('channels.json') || {}
     chData[id] = defaultChannels
-    await wl('channels.json', chData)
+    await writeLocal('channels.json', chData)
 
     setServers(prev => [...prev, server])
     return server
@@ -146,7 +142,7 @@ function useServers(username: string) {
         if (!server?.name || resolved) return
         clearTimeout(timeout)
         resolved = true
-        try { this.off() } catch {}
+        try { this.off() } catch (_e) {}
 
         const joined: Server = { ...server, id: trimmedId }
         await saveServer(joined)
@@ -155,10 +151,17 @@ function useServers(username: string) {
           await saveUserServerIds(username, [...ids, trimmedId])
         }
 
-        gun.get('userServers').get(username).get(trimmedId).put(trimmedId)
-        gun.get('members').get(trimmedId).get(username).put({ username, role: 'member', joinedAt: Date.now() })
-
         setServers(prev => prev.find(s => s.id === trimmedId) ? prev : [...prev, joined])
+
+        // Demander la liste des canaux via Trystero (settings room)
+        // Le owner répondra via 'channels_sync' { action: 'full_list' }
+        // useChannels écoutera et peuplera channels.json automatiquement
+        const settingsRoom = joinMeshRoom(`settings_${trimmedId}`)
+        if (settingsRoom) {
+          // Envoyer une requête de sync (le onPeerJoin dans useChannels répondra)
+          // Rien à faire ici : onPeerJoin du owner déclenchera l'envoi full_list
+        }
+
         resolve(joined)
       })
     })
@@ -174,7 +177,7 @@ function useServers(username: string) {
         if (resolved || !invite?.serverId) return
         clearTimeout(timeout)
         resolved = true
-        try { this.off() } catch {}
+        try { this.off() } catch (_e) {}
         if (invite.expiresAt > 0 && Date.now() > invite.expiresAt) { resolve(null); return }
         if (invite.maxUses > 0 && (invite.uses || 0) >= invite.maxUses) { resolve(null); return }
         gun.get('invites').get(trimmed).get('uses').put((invite.uses || 0) + 1)

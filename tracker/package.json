@@ -1,0 +1,15 @@
+{
+  "name": "mesh-tracker",
+  "version": "1.0.0",
+  "description": "BitTorrent tracker for Mesh P2P signaling",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bittorrent-tracker": "^9.19.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -18,7 +18,7 @@ interface Props {
   serverBannerColor?: string
   onOpenSettings?: () => void
   onEditChannel?: (channel: Channel) => void
-  onCreateChannel?: (name: string, type: 'text' | 'voice', categoryId?: string) => void
+  onCreateChannel?: (name: string, type: 'text' | 'voice', categoryId?: string) => void | Promise<any>
   onDeleteChannel?: (channelId: string) => void
   unreadByChannel?: Record<string, number>
   footer?: React.ReactNode

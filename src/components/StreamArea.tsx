@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type React from 'react'
 import type { StreamConstraints, DesktopSource } from '../types'
 
@@ -141,41 +141,66 @@ function VoiceTile({ user, isStreamer, isSelf, cameraRef }: {
   )
 }
 
-// Modal de sélection de source de capture d'écran
+// Modal de sélection de source de capture d'écran (améliorée)
 function ScreenPickerModal({
   onSelect,
   onCancel
 }: {
-  onSelect: (sourceId: string) => void
+  onSelect: (sourceId: string, constraints: StreamConstraints) => void
   onCancel: () => void
 }) {
   const [sources, setSources] = useState<DesktopSource[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'screen' | 'window'>('screen')
   const [selected, setSelected] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [resolution, setResolution] = useState(1) // index dans RESOLUTIONS
+  const [fps, setFps] = useState(60)
+  const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const electron = (window as any).electron
-        if (electron?.getDesktopSources) {
-          const srcs: DesktopSource[] = await electron.getDesktopSources({ types: ['screen', 'window'] })
-          setSources(srcs)
-        } else {
-          // Navigateur standard — pas de liste de sources disponible
-          setSources([])
-        }
-      } catch (e) {
-        console.error('Erreur desktopCapturer:', e)
+  const loadSources = async () => {
+    try {
+      const electron = (window as any).electron
+      if (electron?.getDesktopSources) {
+        const srcs: DesktopSource[] = await electron.getDesktopSources({ types: ['screen', 'window'] })
+        setSources(srcs)
+      } else {
         setSources([])
-      } finally {
-        setLoading(false)
       }
+    } catch (e) {
+      console.error('Erreur desktopCapturer:', e)
+      setSources([])
+    } finally {
+      setLoading(false)
     }
-    load()
+  }
+
+  // Chargement initial + rafraîchissement auto des thumbnails toutes les 2s
+  useEffect(() => {
+    loadSources()
+    refreshRef.current = setInterval(loadSources, 2000)
+    return () => { if (refreshRef.current) clearInterval(refreshRef.current) }
   }, [])
 
-  const filtered = sources.filter(s => s.type === activeTab)
+  // Raccourci Entrée pour valider
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && selected) handleConfirm()
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, resolution, fps]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filtered = sources
+    .filter(s => s.type === activeTab)
+    .filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()))
+
+  const handleConfirm = () => {
+    if (!selected) return
+    const r = RESOLUTIONS[resolution]
+    onSelect(selected, { width: r.width, height: r.height, frameRate: fps, sourceId: selected })
+  }
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -189,32 +214,44 @@ function ScreenPickerModal({
           <button className="modal-close-btn" onClick={onCancel}>✕</button>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs + recherche */}
         <div className="screen-picker-tabs">
           <button
             className={`screen-picker-tab ${activeTab === 'screen' ? 'active' : ''}`}
-            onClick={() => setActiveTab('screen')}
+            onClick={() => { setActiveTab('screen'); setSearch('') }}
           >
             Écrans
           </button>
           <button
             className={`screen-picker-tab ${activeTab === 'window' ? 'active' : ''}`}
-            onClick={() => setActiveTab('window')}
+            onClick={() => { setActiveTab('window'); setSearch('') }}
           >
             Fenêtres
           </button>
+          {activeTab === 'window' && (
+            <input
+              className="screen-picker-search"
+              type="text"
+              placeholder="Rechercher une fenêtre…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              autoFocus
+            />
+          )}
         </div>
 
         {/* Grid des sources */}
         <div className="screen-picker-grid">
           {loading && (
-            <div className="screen-picker-loading">Chargement des sources...</div>
+            <div className="screen-picker-loading">Chargement des sources…</div>
           )}
           {!loading && filtered.length === 0 && (
             <div className="screen-picker-empty">
               {sources.length === 0
                 ? 'Sources non disponibles dans ce mode (web). Lance l\'app Electron.'
-                : `Aucun ${activeTab === 'screen' ? 'écran' : 'fenêtre'} disponible.`}
+                : search
+                  ? `Aucune fenêtre correspondant à "${search}".`
+                  : `Aucun ${activeTab === 'screen' ? 'écran' : 'fenêtre'} disponible.`}
             </div>
           )}
           {filtered.map(src => (
@@ -222,17 +259,52 @@ function ScreenPickerModal({
               key={src.id}
               className={`screen-picker-item ${selected === src.id ? 'selected' : ''}`}
               onClick={() => setSelected(src.id)}
-              onDoubleClick={() => onSelect(src.id)}
+              onDoubleClick={handleConfirm}
             >
               <div className="screen-picker-thumb">
                 {src.thumbnailDataURL
                   ? <img src={src.thumbnailDataURL} alt={src.name} />
                   : <div className="screen-picker-no-thumb"><IconScreen /></div>
                 }
+                <div className="screen-picker-type-badge">
+                  {src.type === 'screen' ? '🖥' : '🪟'}
+                </div>
               </div>
               <div className="screen-picker-name" title={src.name}>{src.name}</div>
             </div>
           ))}
+        </div>
+
+        {/* Options qualité intégrées */}
+        <div className="screen-picker-quality">
+          <div className="screen-picker-quality-row">
+            <span className="screen-picker-quality-label">Résolution</span>
+            <div className="screen-picker-quality-opts">
+              {RESOLUTIONS.map((r, i) => (
+                <button
+                  key={r.label}
+                  className={`quality-option-btn small ${resolution === i ? 'active' : ''}`}
+                  onClick={() => setResolution(i)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="screen-picker-quality-row">
+            <span className="screen-picker-quality-label">FPS</span>
+            <div className="screen-picker-quality-opts">
+              {FPS_OPTIONS.map(f => (
+                <button
+                  key={f}
+                  className={`quality-option-btn small ${fps === f ? 'active' : ''}`}
+                  onClick={() => setFps(f)}
+                >
+                  {f} fps
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
@@ -241,7 +313,7 @@ function ScreenPickerModal({
           <button
             className="chan-settings-save"
             disabled={!selected}
-            onClick={() => selected && onSelect(selected)}
+            onClick={handleConfirm}
           >
             Partager
           </button>
@@ -332,10 +404,9 @@ function StreamArea({
   voiceUsers, voiceFull, onLeaveVoice,
   isMuted = false, isDeafened = false, onToggleMute, onToggleDeafen
 }: Props) {
-  // États modaux — étape 1 : sélecteur de source, étape 2 : qualité
+  // États modaux
   const [showSourcePicker, setShowSourcePicker] = useState(false)
   const [showQualityModal, setShowQualityModal] = useState(false)
-  const [pendingSourceId, setPendingSourceId] = useState<string | undefined>(undefined)
   const [showDotsMenu, setShowDotsMenu] = useState(false)
 
   const isElectron = !!(window as any).electron?.getDesktopSources
@@ -345,27 +416,26 @@ function StreamArea({
   const otherUsers = voiceUsers.filter(u => u.id !== '__self__')
   const isInCall = voiceUsers.length > 0
 
-  // Lancer le flux : sur Electron → ouvrir le sélecteur de source
+  // Lancer le flux : sur Electron → sélecteur unifié (source + qualité en une étape)
   // Sur web → directement getDisplayMedia (qualité seulement)
   const handleStartStreamClick = () => {
     if (isElectron) {
       setShowSourcePicker(true)
     } else {
-      setPendingSourceId(undefined)
       setShowQualityModal(true)
     }
   }
 
-  // Après sélection de source → passer à la qualité
-  const handleSourceSelected = (sourceId: string) => {
-    setPendingSourceId(sourceId)
+  // Callback du sélecteur unifié Electron (source + qualité déjà choisis)
+  const handleSourceAndQuality = (sourceId: string, constraints: StreamConstraints) => {
     setShowSourcePicker(false)
-    setShowQualityModal(true)
+    onStartStream({ ...constraints, sourceId })
   }
 
+  // Callback qualité web (sans sourceId)
   const handleQualityConfirm = (constraints: StreamConstraints) => {
     setShowQualityModal(false)
-    onStartStream({ ...constraints, sourceId: pendingSourceId })
+    onStartStream(constraints)
   }
 
   return (
@@ -538,18 +608,17 @@ function StreamArea({
         )}
       </div>
 
-      {/* Modal sélecteur de source */}
+      {/* Modal sélecteur de source + qualité unifié (Electron) */}
       {showSourcePicker && (
         <ScreenPickerModal
-          onSelect={handleSourceSelected}
+          onSelect={handleSourceAndQuality}
           onCancel={() => setShowSourcePicker(false)}
         />
       )}
 
-      {/* Modal qualité */}
+      {/* Modal qualité seule (web / non-Electron) */}
       {showQualityModal && (
         <StreamQualityModal
-          sourceId={pendingSourceId}
           onConfirm={handleQualityConfirm}
           onCancel={() => setShowQualityModal(false)}
         />

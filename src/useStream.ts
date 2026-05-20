@@ -283,33 +283,51 @@ function useStream(username: string, voiceSettings?: {
     }
   }, [username])
 
-  // ── Presence stream partage d'ecran (GunDB radisk local OK) ──────
-  useEffect(() => {
-    const streamPresence = gun.get('stream_presence')
-    streamPresence.map().on((data: any, user: string) => {
-      if (!user || user === username) return
-      if (data && data.active === true && (Date.now() - (data.ts || 0)) < 15000) {
-        setStreamers(prev => prev.find(s => s.id === user) ? prev : [...prev, { id: user, username: user }])
+  // ── Presence stream partage d'ecran via Trystero (cross-machine) ─
+  // sendStreamPresenceFn est initialise dans joinVoice/startStream
+  // On stocke une ref pour pouvoir l'appeler depuis startStream/stopStream
+  const sendStreamPresenceFn = useRef<((p: object) => void) | null>(null)
+  const streamRoomRef = useRef<string | null>(null)
+
+  const setupStreamPresence = (channelId: string) => {
+    streamRoomRef.current = channelId
+    const room = joinMeshRoom(`stream_${channelId}`)
+    if (!room) return
+
+    const [sendPresence, getPresence] = (room.makeAction as any)('stream_presence') as [any, any]
+    sendStreamPresenceFn.current = (p: object) => { try { sendPresence(p) } catch (_e) {} }
+
+    getPresence((data: any) => {
+      if (!data?.user || data.user === username) return
+      if (data.active === true) {
+        setStreamers(prev => prev.find(s => s.id === data.user) ? prev : [...prev, { id: data.user, username: data.user }])
       } else {
-        setStreamers(prev => prev.filter(s => s.id !== user))
-        setWatchingStream(prev => prev === user ? null : prev)
+        setStreamers(prev => prev.filter(s => s.id !== data.user))
+        setWatchingStream(prev => prev === data.user ? null : prev)
       }
     })
 
+    // Heartbeat toutes les 5s
     const heartbeat = setInterval(() => {
       if (isStreamingRef.current) {
-        gun.get('stream_presence').get(username).put({ active: true, ts: Date.now() })
+        sendStreamPresenceFn.current?.({ user: username, active: true, ts: Date.now() })
       }
     }, 5000)
+    ;(window as any)[`_shb_${channelId}`] = heartbeat
+  }
 
-    return () => {
-      streamPresence.map().off()
-      clearInterval(heartbeat)
+  const teardownStreamPresence = (channelId: string) => {
+    const hbKey = `_shb_${channelId}`
+    if ((window as any)[hbKey]) {
+      clearInterval((window as any)[hbKey])
+      delete (window as any)[hbKey]
     }
-  }, [username])
+    sendStreamPresenceFn.current = null
+    streamRoomRef.current = null
+  }
 
   // ── Partage d'ecran ──────────────────────────────────────────────
-  const startStream = async (constraints: StreamConstraints) => {
+  const startStream = async (constraints: StreamConstraints, channelId?: string) => {
     try {
       let stream: MediaStream
       if (constraints.sourceId) {
@@ -344,7 +362,13 @@ function useStream(username: string, voiceSettings?: {
         videoRef.current.play().catch(() => {})
       }
 
-      gun.get('stream_presence').get(username).put({ active: true, ts: Date.now() })
+      // Annoncer via Trystero (cross-machine) — canal vocal courant ou channelId fourni
+      const ch = channelId || currentVoiceRoom.current
+      if (ch) {
+        if (!streamRoomRef.current) setupStreamPresence(ch)
+        sendStreamPresenceFn.current?.({ user: username, active: true, ts: Date.now() })
+      }
+
       setIsStreaming(true)
       stream.getVideoTracks()[0].addEventListener('ended', () => stopStream())
     } catch (e) {
@@ -362,7 +386,9 @@ function useStream(username: string, voiceSettings?: {
     Object.values(streamPeers.current).forEach(p => p.close())
     streamPeers.current = {}
     isStreamingRef.current = false
-    gun.get('stream_presence').get(username).put({ active: false, ts: Date.now() })
+    // Annoncer arrêt via Trystero (cross-machine)
+    sendStreamPresenceFn.current?.({ user: username, active: false, ts: Date.now() })
+    if (streamRoomRef.current) teardownStreamPresence(streamRoomRef.current)
     setIsStreaming(false)
   }
 
@@ -394,7 +420,7 @@ function useStream(username: string, voiceSettings?: {
           cameraVideoRef.current.play().catch(() => {})
         }
         setIsCameraOn(true)
-      } catch {
+      } catch (_e) {
         alert("Impossible d'acceder a la camera !")
       }
     }
@@ -444,6 +470,9 @@ function useStream(username: string, voiceSettings?: {
       })
     }
 
+    // Initialiser la presence stream pour ce channel vocal (cross-machine)
+    setupStreamPresence(channelId)
+
     // MICRO
     try {
       const audioConstraints: MediaTrackConstraints = voiceSettings?.micDeviceId
@@ -490,6 +519,11 @@ function useStream(username: string, voiceSettings?: {
 
     currentVoiceRoom.current = null
     setVoiceUsers([])
+
+    // Teardown stream presence si on quitte le channel
+    if (room && streamRoomRef.current === `stream_${room}`) {
+      teardownStreamPresence(room)
+    }
 
     Object.values(voicePeers.current).forEach(p => {
       p.onconnectionstatechange = null

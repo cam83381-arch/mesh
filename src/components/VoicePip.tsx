@@ -68,7 +68,7 @@ function useAudioLevel(
         animRef.current = requestAnimationFrame(tick)
       }
       animRef.current = requestAnimationFrame(tick)
-    } catch {
+    } catch (_e) {
       // AudioContext non dispo
     }
     return () => {

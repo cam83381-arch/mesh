@@ -37,6 +37,17 @@ function createMainWindow() {
 
   mainWindow.loadURL(appUrl)
 
+  // DevTools : F12 en dev ET en prod pour debug
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools()
+      } else {
+        mainWindow.webContents.openDevTools({ mode: 'detach' })
+      }
+    }
+  })
+
   // Ouvrir les liens externes dans le navigateur système
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -182,9 +193,24 @@ ipcMain.handle('get-desktop-sources', async (_event, opts = {}) => {
 })
 
 // ── IPC : notifications natives ──
-ipcMain.on('show-notification', (event, { title, body }) => {
+ipcMain.on('show-notification', (_event, { title, body }) => {
   if (Notification.isSupported()) {
-    new Notification({ title, body, silent: false }).show()
+    const notif = new Notification({ title, body, silent: false, icon: path.join(__dirname, '..', 'public', 'icon.png') })
+    notif.on('click', () => {
+      if (mainWindow) { mainWindow.show(); mainWindow.focus() }
+    })
+    notif.show()
+  }
+})
+
+// ── IPC : badge non-lu sur l'icône tray ──
+ipcMain.on('set-badge-count', (_event, { count }) => {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setBadge(count > 0 ? String(count) : '')
+  }
+  // Windows/Linux : mettre à jour le tooltip du tray
+  if (tray) {
+    tray.setToolTip(count > 0 ? `Mesh (${count} non lu${count > 1 ? 's' : ''})` : 'Mesh')
   }
 })
 

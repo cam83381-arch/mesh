@@ -20,7 +20,7 @@ function useDMTyping(pairId: string | null, username: string) {
     const room = joinMeshRoom(`dm_typing_${pairId}`)
     if (room) {
       const [sendTypingFn, getTyping] = (room.makeAction as any)('typing') as [any, any]
-      sendTypingP2P.current = (t: object) => { try { sendTypingFn(t) } catch {} }
+      sendTypingP2P.current = (t: object) => { try { sendTypingFn(t) } catch (_e) {} }
 
       getTyping((data: any) => {
         if (!active || !data?.user || data.user === username) return

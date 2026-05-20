@@ -3838,6 +3838,39 @@ h1, h2, h3, h4, h5, h6,
   color: var(--text-muted);
   white-space: nowrap;
 }
+.search-nav-btn {
+  background: transparent;
+  border: 1px solid var(--outline-variant);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 3px 7px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.search-nav-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+mark.search-highlight {
+  background: rgba(255, 214, 0, 0.35);
+  color: #ffe680;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.msg-group.search-active-match {
+  background: rgba(88, 101, 242, 0.12);
+  border-left: 2px solid var(--accent);
+  padding-left: 14px;
+  border-radius: 0 6px 6px 0;
+  transition: background 0.2s;
+}
+.msg-group.search-active-match mark.search-highlight {
+  background: rgba(255, 214, 0, 0.55);
+  color: #ffe040;
+}
 
 /* ── Pins panel ── */
 .pins-panel {
@@ -5306,6 +5339,68 @@ h1, h2, h3, h4, h5, h6,
   box-shadow: 0 2px 8px var(--primary-glow);
 }
 .titlebar-update-btn:hover { filter: brightness(1.1); }
+
+/* ── Indicateur peers P2P ── */
+.titlebar-peer-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px 0 14px;
+  height: 100%;
+  -webkit-app-region: no-drag;
+  cursor: default;
+  opacity: 0.6;
+  transition: opacity var(--transition-fast);
+}
+.titlebar-peer-indicator:hover { opacity: 1; }
+
+.peer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.titlebar-peer-indicator.connected .peer-dot {
+  background: #23d18b;
+  box-shadow: 0 0 6px rgba(35, 209, 139, 0.7);
+  animation: peer-pulse 2.5s ease-in-out infinite;
+}
+@keyframes peer-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(35, 209, 139, 0.7); }
+  50%       { box-shadow: 0 0 12px rgba(35, 209, 139, 1); }
+}
+
+.peer-count {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  transition: color var(--transition-fast);
+  min-width: 12px;
+}
+.titlebar-peer-indicator.connected .peer-count { color: #23d18b; }
+
+/* État offline */
+.titlebar-peer-indicator.offline .peer-dot {
+  background: #ed4245;
+  box-shadow: 0 0 6px rgba(237, 66, 69, 0.7);
+}
+.titlebar-peer-indicator.offline .peer-count { color: #ed4245; }
+
+/* État reconnexion en cours */
+.titlebar-peer-indicator.reconnecting .peer-dot {
+  background: #f0b232;
+  box-shadow: 0 0 6px rgba(240, 178, 50, 0.7);
+  animation: peer-reconnecting 1s ease-in-out infinite;
+}
+.titlebar-peer-indicator.reconnecting .peer-count { color: #f0b232; }
+@keyframes peer-reconnecting {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
 
 /* Décaler le contenu principal vers le bas quand Electron actif */
 body.is-electron #root {

@@ -40,6 +40,8 @@ import useDMTyping from './useDMTyping'
 import { useBotEngine } from './useBotEngine'
 import useAllChannelPerms from './useAllChannelPerms'
 import useVoicePresence from './useVoicePresence'
+import useChannelKeys from './useChannelKeys'
+import { hasChannelKey } from './crypto'
 
 function App() {
   const { user, setUser } = useApp()
@@ -77,27 +79,28 @@ function App() {
   // ── Hooks de données (tous AVANT tout return conditionnel) ──
   const { servers, createServer, joinServer, joinByInvite, updateServer, deleteServer, leaveServer } = useServers(username)
   const { channels, currentChannel, setCurrentChannel, updateChannel, createChannel, deleteChannel } = useChannels(activeServerId)
-  const { members, updateRole, kickMember, isKicked, assignCustomRole } = useMembers(activeServerId, username)
+  const { members, updateRole, kickMember, isKicked, assignCustomRole, applyTempban } = useMembers(activeServerId, username)
   const { customRoles, createRole, updateRole: updateCustomRole, updatePermission, deleteRole } = useRoles(activeServerId)
 
   const { profile, updateStatus, updateCustomStatus, saveProfile } = useProfile(username)
 
   // Socket canal principal
   const {
-    messages, reactions, typingUsers,
+    messages, reactions, typingUsers, hasMore, loadMoreMessages,
     sendMessage, editMessage, deleteMessage, addReaction, removeReaction, sendTyping
-  } = useSocket(currentChannel?.id || '', username, activeServerId, profile)
+  } = useSocket(currentChannel?.id || '', username, activeServerId, profile, applyTempban)
 
   // Socket volet droit (split-view)
   const {
     messages: rightMessages, reactions: rightReactions, typingUsers: rightTypingUsers,
+    hasMore: rightHasMore, loadMoreMessages: loadMoreRightMessages,
     sendMessage: sendRightMessage,
     editMessage: editRightMessage,
     deleteMessage: deleteRightMessage,
     addReaction: addRightReaction,
     removeReaction: removeRightReaction,
     sendTyping: sendRightTyping,
-  } = useSocket(rightChannel?.id || '', username, rightChannel ? activeServerId : '', profile)
+  } = useSocket(rightChannel?.id || '', username, rightChannel ? activeServerId : '', profile, applyTempban)
   const { settings, updateSettings } = useSettings(username)
   const {
     isStreaming, streamers, watchingStream, videoRef, screenStream, startStream, stopStream, watchStream, stopWatching,
@@ -138,6 +141,25 @@ function App() {
     onAssignRole: (u, role) => assignCustomRole(u, role),
     onRemoveRole: (_u, _role) => { /* removeCustomRole non exposé pour l'instant */ },
   })
+
+  // ── Clés de canal E2E ──
+  const myMemberRole = members.find(m => m.username === username)?.role
+  const isOwnerOrAdmin = myMemberRole === 'owner' || myMemberRole === 'admin'
+  const { requestChannelKey, ensureChannelKeys } = useChannelKeys({
+    serverId: activeServerId,
+    username,
+    channelIds: channels.filter(c => c.type === 'text').map(c => c.id),
+    isOwnerOrAdmin,
+    onKeyReceived: (_channelId) => {
+      // La clé est stockée — les prochains messages seront déchiffrés automatiquement
+    },
+  })
+  // Demander les clés manquantes quand le canal actif change
+  useEffect(() => {
+    if (currentChannel?.type === 'text' && currentChannel.id) {
+      requestChannelKey(currentChannel.id)
+    }
+  }, [currentChannel?.id, requestChannelKey])
 
   // ── Charger banner du serveur actif ──
   useEffect(() => {
@@ -357,6 +379,7 @@ function App() {
   const chatAreaCommonProps = {
     members, customRoles, friends, serverId: activeServerId,
     notifSettings,
+    tenorKey: settings.tenorKey,
     onOpenDM: handleOpenDM,
     onAddFriend: handleAddFriend,
     onRemoveFriend: handleRemoveFriend,
@@ -455,7 +478,12 @@ function App() {
                 serverBannerColor={serverBannerColor}
                 onOpenSettings={() => setShowServerSettings(true)}
                 onEditChannel={ch => setEditingChannel(ch)}
-                onCreateChannel={createChannel}
+                onCreateChannel={async (name, type, categoryId) => {
+                  const ch = await createChannel(name, type, categoryId)
+                  // Générer la clé E2E pour le nouveau canal texte
+                  if (ch && type === 'text') await ensureChannelKeys([ch.id])
+                  return ch
+                }}
                 onDeleteChannel={deleteChannel}
                 unreadByChannel={unreadByChannel}
                 onSplitView={handleSplitView}
@@ -529,6 +557,7 @@ function App() {
                       key={currentChannel?.id}
                       channel={currentChannel?.type === 'text' ? currentChannel : channels.find(c => c.type === 'text') || null}
                       messages={messages} reactions={reactions} typingUsers={typingUsers}
+                      hasMore={hasMore} onLoadMore={loadMoreMessages}
                       onSendMessage={handleSendMessage} onEditMessage={handleEditMessage}
                       onDeleteMessage={handleDeleteMessage} onAddReaction={handleAddReaction}
                       onRemoveReaction={handleRemoveReaction} onTyping={sendTyping}
@@ -556,6 +585,7 @@ function App() {
                     key={rightChannel?.id}
                     channel={rightChannel}
                     messages={rightMessages} reactions={rightReactions} typingUsers={rightTypingUsers}
+                    hasMore={rightHasMore} onLoadMore={loadMoreRightMessages}
                     onSendMessage={(content, replyTo, fileUrl, fileName, fileType, fileSize) => {
                       if (!user) return
                       sendRightMessage(content, replyTo, fileUrl, fileName, fileType, fileSize)
@@ -586,6 +616,7 @@ function App() {
                 key={currentChannel?.id}
                 channel={currentChannel}
                 messages={messages} reactions={reactions} typingUsers={typingUsers}
+                hasMore={hasMore} onLoadMore={loadMoreMessages}
                 onSendMessage={handleSendMessage} onEditMessage={handleEditMessage}
                 onDeleteMessage={handleDeleteMessage} onAddReaction={handleAddReaction}
                 onRemoveReaction={handleRemoveReaction} onTyping={sendTyping}
@@ -628,10 +659,19 @@ function App() {
         {/* ── Modales ── */}
         {showServerModal && (
           <ServerModal
-            onCreateServer={(name) => {
-              createServer(name).then(server => {
-                if (server) { setActiveServerId(server.id); setIsDMMode(false); setShowServerModal(false) }
-              })
+            onCreateServer={async (name) => {
+              const server = await createServer(name)
+              if (server) {
+                setActiveServerId(server.id)
+                setIsDMMode(false)
+                setShowServerModal(false)
+                // Générer les clés pour tous les canaux texte du nouveau serveur
+                // Les canaux sont chargés après le setActiveServerId — petit délai
+                setTimeout(async () => {
+                  const textChannelIds = channels.filter(c => c.type === 'text').map(c => c.id)
+                  if (textChannelIds.length > 0) await ensureChannelKeys(textChannelIds)
+                }, 500)
+              }
             }}
             onJoinServer={async (input) => {
               let server = await joinByInvite(input)
@@ -675,6 +715,11 @@ function App() {
             onUpdatePermission={(roleId, perm, val) => updatePermission(roleId, perm, val)}
             onDeleteRole={(roleId) => deleteRole(roleId)}
             onOpenBotEditor={(botId) => { setActiveBotId(botId); setShowBotEditor(true); setShowServerSettings(false) }}
+            channels={channels.map(c => ({ id: c.id, name: c.name, type: c.type }))}
+            onEnsureChannelKeys={ensureChannelKeys}
+            channelKeyStatus={Object.fromEntries(
+              channels.filter(c => c.type === 'text').map(c => [c.id, hasChannelKey(c.id)])
+            )}
           />
         )}
 

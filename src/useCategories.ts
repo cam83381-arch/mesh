@@ -54,7 +54,7 @@ function useCategories(serverId: string) {
         if (!active) return
         const cats = await loadCats(serverId)
         Object.values(cats).forEach(cat => {
-          try { sendCat(cat) } catch {}
+          try { sendCat(cat) } catch (_e) {}
         })
       })
     }
@@ -75,7 +75,7 @@ function useCategories(serverId: string) {
     const room = joinMeshRoom(`categories_${serverId}`)
     if (room) {
       const [sendCat] = (room.makeAction as any)('category_update') as [any, any]
-      try { sendCat(cat) } catch {}
+      try { sendCat(cat) } catch (_e) {}
     }
   }
 
@@ -89,7 +89,7 @@ function useCategories(serverId: string) {
     const room = joinMeshRoom(`categories_${serverId}`)
     if (room) {
       const [sendCat] = (room.makeAction as any)('category_update') as [any, any]
-      try { sendCat(cats[id]) } catch {}
+      try { sendCat(cats[id]) } catch (_e) {}
     }
   }
 
@@ -104,7 +104,7 @@ function useCategories(serverId: string) {
       const room = joinMeshRoom(`categories_${serverId}`)
       if (room) {
         const [sendCat] = (room.makeAction as any)('category_update') as [any, any]
-        try { sendCat({ ...deleted, _deleted: true }) } catch {}
+        try { sendCat({ ...deleted, _deleted: true }) } catch (_e) {}
       }
     }
   }

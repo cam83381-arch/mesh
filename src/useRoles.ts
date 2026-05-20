@@ -57,7 +57,7 @@ function useRoles(serverId: string) {
       room.onPeerJoin(async () => {
         const roles = await loadRoles(serverId)
         Object.values(roles).forEach(r => {
-          try { sendRole(r) } catch {}
+          try { sendRole(r) } catch (_e) {}
         })
       })
     }
@@ -81,7 +81,7 @@ function useRoles(serverId: string) {
     roles[id] = role
     await saveRoles(serverId, roles)
     setCustomRoles(sortRoles(roles))
-    try { sendRoleFn.current?.(role) } catch {}
+    try { sendRoleFn.current?.(role) } catch (_e) {}
   }
 
   const updateRole = async (roleId: string, updates: Partial<Omit<CustomRole, 'id' | 'serverId'>>) => {
@@ -90,7 +90,7 @@ function useRoles(serverId: string) {
     roles[roleId] = { ...roles[roleId], ...updates }
     await saveRoles(serverId, roles)
     setCustomRoles(sortRoles(roles))
-    try { sendRoleFn.current?.(roles[roleId]) } catch {}
+    try { sendRoleFn.current?.(roles[roleId]) } catch (_e) {}
   }
 
   const updatePermission = async (roleId: string, permission: keyof Permissions, value: boolean) => {
@@ -99,7 +99,7 @@ function useRoles(serverId: string) {
     roles[roleId] = { ...roles[roleId], permissions: { ...roles[roleId].permissions, [permission]: value } }
     await saveRoles(serverId, roles)
     setCustomRoles(sortRoles(roles))
-    try { sendRoleFn.current?.(roles[roleId]) } catch {}
+    try { sendRoleFn.current?.(roles[roleId]) } catch (_e) {}
   }
 
   const deleteRole = async (roleId: string) => {
@@ -109,7 +109,7 @@ function useRoles(serverId: string) {
     await saveRoles(serverId, roles)
     setCustomRoles(sortRoles(roles))
     if (deleted) {
-      try { sendRoleFn.current?.({ ...deleted, _deleted: true }) } catch {}
+      try { sendRoleFn.current?.({ ...deleted, _deleted: true }) } catch (_e) {}
     }
   }
 

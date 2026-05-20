@@ -51,7 +51,7 @@ function useAllChannelPerms(serverId: string) {
     customRoles: CustomRole[],
   ): boolean => {
     const overrides = permsMap[channelId] || []
-    const resolved = resolveChannelPerms(username, member, customRoles, overrides)
+    const resolved = resolveChannelPerms(username, member, customRoles, overrides, member?.role)
     return resolved.canRead
   }
 

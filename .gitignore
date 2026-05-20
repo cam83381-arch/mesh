@@ -30,3 +30,19 @@ Thumbs.db
 
 # Electron builder cache
 electron-builder-cache/
+
+# Fichiers de travail internes (ne pas versionner)
+mesh-annotate.html
+mesh-design-full.html
+mesh-design-review.html
+mesh-proposals.html
+$env
+
+# Dossier interne Claude
+.claude/
+
+# Données locales
+data/
+
+# Doublon de licence
+LICENSE.txt
